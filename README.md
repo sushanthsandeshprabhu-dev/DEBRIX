@@ -1,6 +1,6 @@
 # DEBRIX × AIRWISE prototype
 
-A small, full-stack Bengaluru C&D materials tracking prototype. It uses the Node.js built-in HTTP server and SQLite module, so it needs no package installation or external database. Data persists in `data/debrix-airwise.sqlite`.
+A small, full-stack Bengaluru C&D materials tracking prototype. Locally it uses Node.js and SQLite, so it needs no database service. Data persists in `data/debrix-airwise.sqlite`. The Vercel version uses a private Vercel Blob JSON state document with conditional writes to keep prototype changes persistent across function instances.
 
 ## Run locally
 
@@ -21,6 +21,12 @@ On the first run, the app creates four visibly marked **DEMO** pickup records, i
 The app can fetch nearby OpenAQ v3 station reports. Create a local `.env` from `.env.example`, then set `OPENAQ_API_KEY` to a key from OpenAQ. Optionally set `OPENAQ_COORDINATES` and `OPENAQ_RADIUS_METERS`, restart the server, and use **Refresh** in AIRWISE. The server checks within 25 km of central Bengaluru by default and periodically refreshes while running.
 
 The interface shows reported PM2.5 / PM10 values, station name, source, and observation timestamp. It does **not** compute or certify an official AQI, fill gaps with modeled data, or show seeded air readings. Without a configured API key, air data remains empty and clearly marked unavailable. OpenAQ aggregates measurements from upstream providers; station coverage, quality, and reporting freshness vary.
+
+## Vercel deployment
+
+The repository includes a Vercel function at `api/[...path].mjs`. Connect a private Blob store to the Vercel project before using booking workflows; the Blob store supplies `BLOB_READ_WRITE_TOKEN`. The function stores the prototype's workflow state in one private JSON document and uses Vercel Blob conditional writes (ETag compare-and-swap) to avoid overwriting concurrent updates. Set `OPENAQ_API_KEY` in Vercel Project Environment Variables to enable the optional air feed. The `public/` folder is the static output directory.
+
+The Blob document store is suitable for this low-volume prototype, but it is not a relational database. For a production rollout or larger workloads, migrate the records to managed Postgres and add real user authentication and access control.
 
 ## Prototype workflows
 
