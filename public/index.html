@@ -3,40 +3,54 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f6f7f2" />
-  <title>DEBRIX × AIRWISE | Bengaluru circular materials network</title>
+  <meta name="theme-color" content="#f5f6f1" />
+  <meta name="description" content="DEBRIX connects construction and demolition waste pickup, transport, recovery and reuse." />
+  <title>DEBRIX — Circular materials, connected</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@500;600;700;800&display=swap" rel="stylesheet" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/market-stock.css" />
 </head>
 <body>
   <div class="app-shell">
     <aside class="sidebar">
-      <a class="brand" href="#" aria-label="DEBRIX and AIRWISE home"><span class="brand-mark"><i></i><i></i><i></i></span><span><strong>urban<span class="brand-x">×</span>loop</strong><small>BENGALURU · PILOT</small></span></a>
-      <div class="workspace-label">WORKSPACE</div>
-      <div class="role-picker" role="tablist" aria-label="Choose a demo role">
-        <button class="role-option active" data-role="citizen"><span class="role-icon">⌂</span><span>Citizen</span><span class="role-check">●</span></button>
-        <button class="role-option" data-role="operator"><span class="role-icon">↗</span><span>Operator</span><span class="role-check">●</span></button>
-        <button class="role-option" data-role="recycler"><span class="role-icon">⟳</span><span>Recycler</span><span class="role-check">●</span></button>
-        <button class="role-option" data-role="authority"><span class="role-icon">▦</span><span>City operations</span><span class="role-check">●</span></button>
-      </div>
+      <a class="brand" href="#home" aria-label="DEBRIX home"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span><span><strong>DEBRIX</strong><small> CIRCULAR MATERIALS</small></span></a>
+      <div class="workspace-label" id="workspace-label">CITIZEN PORTAL</div>
+      <div class="sidebar-network"><span class="network-dot"></span><div><strong>Bengaluru pilot</strong><small>Shared operations ledger</small></div></div>
       <div class="sidebar-rule"></div>
-      <div class="workspace-label">YOUR NETWORK</div>
-      <nav class="nav-list" id="nav-list"></nav>
+      <div class="workspace-label">YOUR WORKSPACE</div>
+      <nav class="nav-list" id="nav-list" aria-label="Main navigation"></nav>
       <div class="sidebar-bottom">
-        <div class="pilot-note"><span class="pilot-dot"></span><div><b>Prototype environment</b><small>Some records are seeded demo data</small></div></div>
-        <div class="profile"><div class="avatar" id="avatar">A</div><div class="profile-info"><b id="profile-name">Ananya Rao</b><small id="profile-role">Citizen account</small></div><button class="more-button" aria-label="More options">···</button></div>
+        <div class="pilot-note"><span class="pilot-dot"></span><div><b>Prototype environment</b><small>Seeded records are labelled DEMO</small></div></div>
+        <div class="profile"><div class="avatar" id="avatar">A</div><div class="profile-info"><b id="profile-name">Ananya Rao</b><small id="profile-role">Citizen</small></div></div>
       </div>
     </aside>
     <main class="main-area">
-      <header class="topbar"><div class="breadcrumbs"><span>Urban materials</span><span class="crumb-sep">/</span><strong id="crumb-current">My dashboard</strong></div><div class="topbar-actions"><span class="connection"><i></i> Database connected</span><button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button><div class="top-avatar" id="top-avatar">A</div></div></header>
-      <div id="view" class="view" aria-live="polite"><div class="loading"><span class="spinner"></span> Loading your workspace…</div></div>
-      <footer class="footer"><span>URBANLOOP PILOT · BENGALURU</span><span>Material traceability <i class="footer-dot"></i> air context <i class="footer-dot"></i> verified outcomes</span></footer>
+      <header class="topbar">
+        <div class="breadcrumbs"><span>DEBRIX</span><span class="crumb-sep">/</span><strong id="crumb-current">Overview</strong></div>
+        <div class="topbar-actions">
+          <span class="sync-state" id="sync-state"><i></i><span>Connecting</span></span>
+          <button class="icon-button" id="refresh-button" title="Refresh data" aria-label="Refresh data">↻</button>
+          <button class="icon-button theme-toggle" id="theme-button" title="Switch theme" aria-label="Switch to dark theme">◐</button>
+          <div class="portal-switch" role="group" aria-label="Portal access">
+            <button class="portal-button active" id="citizen-portal">Citizen</button>
+            <button class="portal-button" id="admin-portal">Admin sign in</button>
+          </div>
+          <div class="admin-tools hidden" id="admin-tools">
+            <label class="sr-only" for="admin-role">Administrator workspace</label>
+            <select id="admin-role" aria-label="Administrator workspace"><option value="operator">Operator</option><option value="recycler">Recycler</option></select>
+            <button class="text-button" id="logout-button">Sign out</button>
+          </div>
+        </div>
+      </header>
+      <section id="view" class="view" aria-live="polite"><div class="loading"><span class="spinner"></span> Loading DEBRIX…</div></section>
+      <footer class="footer"><span>DEBRIX · BENGALURU PILOT</span><span>Collection → transport → recovery → reuse</span></footer>
     </main>
   </div>
   <div id="toast-region" class="toast-region" aria-live="polite"></div>
   <dialog id="detail-dialog" class="detail-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><div id="dialog-content"></div></dialog>
+  <dialog id="login-dialog" class="login-dialog"><form method="dialog"><button class="dialog-close" aria-label="Close">×</button></form><div id="login-content"></div></dialog>
   <script src="/app.js" defer></script>
 </body>
 </html>

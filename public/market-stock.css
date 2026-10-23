@@ -1,0 +1,2 @@
+.stock-edit{display:flex;align-items:end;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.stock-edit label{display:grid;gap:5px;flex:1;font-size:8px;font-weight:700;color:var(--muted)}.stock-edit input{width:100%;border:1px solid var(--line);background:var(--paper);color:var(--ink);border-radius:7px;padding:8px;font-size:9px}.stock-edit button{flex:none}.admin-products{margin-top:13px}
+

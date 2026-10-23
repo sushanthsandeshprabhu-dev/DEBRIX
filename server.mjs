@@ -1,249 +1,94 @@
 import http from 'node:http';
 import { readFileSync, existsSync, mkdirSync } from 'node:fs';
-import { join, extname, resolve } from 'node:path';
+import { join, extname, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DatabaseSync } from 'node:sqlite';
-import { randomUUID } from 'node:crypto';
+import { createHmac, createHash, timingSafeEqual, randomUUID } from 'node:crypto';
 
-const ROOT = fileURLToPath(new URL('.', import.meta.url));
-const PUBLIC = join(ROOT, 'public');
-const DATA_DIR = join(ROOT, 'data');
-mkdirSync(DATA_DIR, { recursive: true });
-
-function loadDotEnv() {
-  const path = join(ROOT, '.env');
-  if (!existsSync(path)) return;
-  for (const line of readFileSync(path, 'utf8').split(/\r?\n/)) {
-    const match = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].replace(/^['"]|['"]$/g, '');
-  }
-}
+const ROOT=fileURLToPath(new URL('.',import.meta.url)),PUBLIC=join(ROOT,'public'),DATA_DIR=join(ROOT,'data');
+mkdirSync(DATA_DIR,{recursive:true});
+function loadDotEnv(){const path=join(ROOT,'.env');if(!existsSync(path))return;for(const line of readFileSync(path,'utf8').split(/\r?\n/)){const m=line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*?)\s*$/);if(m&&!process.env[m[1]])process.env[m[1]]=m[2].replace(/^['"]|['"]$/g,'');}}
 loadDotEnv();
-
-const db = new DatabaseSync(join(DATA_DIR, 'debrix-airwise.sqlite'));
-db.exec(`PRAGMA journal_mode = WAL;
-PRAGMA foreign_keys = ON;
+const db=new DatabaseSync(join(DATA_DIR,'debrix-airwise.sqlite'));
+db.exec(`PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;
 CREATE TABLE IF NOT EXISTS bookings (
- id TEXT PRIMARY KEY, created_at TEXT NOT NULL, citizen_name TEXT NOT NULL, phone TEXT NOT NULL,
- address TEXT NOT NULL, locality TEXT NOT NULL, waste_type TEXT NOT NULL, quantity_tonnes REAL NOT NULL,
- preferred_date TEXT NOT NULL, status TEXT NOT NULL, operator_name TEXT, vehicle_id TEXT, pickup_at TEXT,
- received_tonnes REAL, facility_id TEXT, received_at TEXT, sort_notes TEXT, recycled_tonnes REAL,
- reused_tonnes REAL, residual_tonnes REAL, residual_destination TEXT, evidence_ref TEXT, verified_at TEXT,
- demo INTEGER NOT NULL DEFAULT 0
+ id TEXT PRIMARY KEY,created_at TEXT NOT NULL,citizen_name TEXT NOT NULL,phone TEXT NOT NULL,address TEXT NOT NULL,locality TEXT NOT NULL,waste_type TEXT NOT NULL,quantity_tonnes REAL NOT NULL,preferred_date TEXT NOT NULL,status TEXT NOT NULL,operator_name TEXT,vehicle_id TEXT,pickup_at TEXT,received_tonnes REAL,facility_id TEXT,received_at TEXT,sort_notes TEXT,recycled_tonnes REAL,reused_tonnes REAL,residual_tonnes REAL,residual_destination TEXT,evidence_ref TEXT,verified_at TEXT,demo INTEGER NOT NULL DEFAULT 0,instructions TEXT,pickup_latitude REAL,pickup_longitude REAL,location_json TEXT,outputs_json TEXT,updated_at TEXT,facility_name TEXT,receipt_evidence TEXT
 );
-CREATE TABLE IF NOT EXISTS events (
- id INTEGER PRIMARY KEY AUTOINCREMENT, booking_id TEXT NOT NULL REFERENCES bookings(id), at TEXT NOT NULL,
- actor_role TEXT NOT NULL, actor_name TEXT NOT NULL, event_type TEXT NOT NULL, note TEXT NOT NULL,
- evidence_ref TEXT, demo INTEGER NOT NULL DEFAULT 0
-);
-CREATE TABLE IF NOT EXISTS air_observations (
- id INTEGER PRIMARY KEY AUTOINCREMENT, fetched_at TEXT NOT NULL, location_id INTEGER NOT NULL,
- location_name TEXT NOT NULL, locality TEXT, latitude REAL, longitude REAL, parameter TEXT NOT NULL,
- value REAL NOT NULL, unit TEXT, observed_at TEXT NOT NULL, source TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_events_booking ON events(booking_id, at);
-CREATE INDEX IF NOT EXISTS idx_air_latest ON air_observations(fetched_at);`);
+CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY AUTOINCREMENT,booking_id TEXT NOT NULL REFERENCES bookings(id),at TEXT NOT NULL,actor_role TEXT NOT NULL,actor_name TEXT NOT NULL,event_type TEXT NOT NULL,note TEXT NOT NULL,evidence_ref TEXT,demo INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS air_observations (id INTEGER PRIMARY KEY AUTOINCREMENT,fetched_at TEXT NOT NULL,location_id INTEGER NOT NULL,location_name TEXT NOT NULL,locality TEXT,latitude REAL,longitude REAL,parameter TEXT NOT NULL,value REAL NOT NULL,unit TEXT,observed_at TEXT NOT NULL,source TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS products (id TEXT PRIMARY KEY,name TEXT NOT NULL,material_type TEXT NOT NULL,description TEXT,quality_note TEXT,quality_status TEXT NOT NULL,facility_name TEXT NOT NULL,inventory_tonnes REAL NOT NULL,available INTEGER NOT NULL DEFAULT 1,symbol TEXT,tint TEXT,created_at TEXT,updated_at TEXT,demo INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS orders (id TEXT PRIMARY KEY,created_at TEXT NOT NULL,updated_at TEXT,product_id TEXT NOT NULL,product_name TEXT NOT NULL,facility_name TEXT NOT NULL,citizen_name TEXT NOT NULL,phone TEXT NOT NULL,quantity_tonnes REAL NOT NULL,intended_use TEXT,member_opt_in INTEGER NOT NULL DEFAULT 0,status TEXT NOT NULL,stock_deducted INTEGER NOT NULL DEFAULT 0,delivered_at TEXT,in_use_at TEXT,demo INTEGER NOT NULL DEFAULT 0);
+CREATE INDEX IF NOT EXISTS idx_events_booking ON events(booking_id,at);CREATE INDEX IF NOT EXISTS idx_air_latest ON air_observations(fetched_at);CREATE INDEX IF NOT EXISTS idx_order_customer ON orders(citizen_name,created_at);`);
+function ensureColumn(table,name,type){const cols=db.prepare(`PRAGMA table_info(${table})`).all().map(c=>c.name);if(!cols.includes(name))db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${type}`);}
+for(const [name,type] of [['instructions','TEXT'],['pickup_latitude','REAL'],['pickup_longitude','REAL'],['location_json','TEXT'],['outputs_json','TEXT'],['updated_at','TEXT'],['facility_name','TEXT'],['receipt_evidence','TEXT']])ensureColumn('bookings',name,type);
+const now=()=>new Date().toISOString(),isoAgo=h=>new Date(Date.now()-h*3600000).toISOString(),id=(p)=>`${p}-${randomUUID().slice(0,8).toUpperCase()}`;
+function audit(bookingId,role,name,type,note,evidence=null,demo=0){db.prepare('INSERT INTO events (booking_id,at,actor_role,actor_name,event_type,note,evidence_ref,demo) VALUES (?,?,?,?,?,?,?,?)').run(bookingId,now(),role,name,type,note,evidence,demo);}
+function seed(){if(db.prepare('SELECT count(*) n FROM bookings').get().n)return;const records=[
+ {id:'DBX-2048',h:24,name:'Ananya Rao',phone:'98••• 2104',address:'14th Cross, HSR Layout, Sector 2',locality:'HSR Layout',type:'Concrete & brick',qty:1.8,date:new Date(Date.now()+86400000).toISOString().slice(0,10),status:'assigned',operator:'Kiran S.',vehicle:'DEMO-VAN-01',updated:isoAgo(22)},
+ {id:'DBX-2047',h:48,name:'R. Menon',phone:'98••• 7302',address:'8th Main, Indiranagar',locality:'Indiranagar',type:'Mixed C&D',qty:2.4,date:new Date(Date.now()-86400000).toISOString().slice(0,10),status:'in_transit',operator:'Meera P.',vehicle:'DEMO-TRUCK-02',pickup:isoAgo(40),updated:isoAgo(36)},
+ {id:'DBX-2046',h:96,name:'S. Kumar',phone:'98••• 9190',address:'BTM 2nd Stage, Tavarekere Road',locality:'BTM Layout',type:'Tiles & ceramics',qty:1.2,date:new Date(Date.now()-3*86400000).toISOString().slice(0,10),status:'processing',operator:'Ravi N.',vehicle:'DEMO-TRUCK-03',pickup:isoAgo(70),received:1.15,facility:'DEMO-FAC-01',receivedAt:isoAgo(60),receiptEvidence:'DEMO-TICKET-2046',updated:isoAgo(52)}
+ ];const stmt=db.prepare(`INSERT INTO bookings(id,created_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,operator_name,vehicle_id,pickup_at,received_tonnes,facility_id,received_at,receipt_evidence,demo,updated_at,outputs_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?, '[]')`);for(const b of records){stmt.run(b.id,isoAgo(b.h),b.name,b.phone,b.address,b.locality,b.type,b.qty,b.date,b.status,b.operator||null,b.vehicle||null,b.pickup||null,b.received||null,b.facility||null,b.receivedAt||null,b.receiptEvidence||null,b.updated);audit(b.id,'citizen',b.name,'registered','Seeded demonstration pickup request.',null,1);if(b.status!=='requested')audit(b.id,'operator',b.operator||'Dispatch desk',b.status,`Seeded demo status: ${b.status}.`,null,1);}
+ const receivedAt=isoAgo(116),verified=isoAgo(92);db.prepare(`INSERT INTO bookings(id,created_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,operator_name,vehicle_id,pickup_at,received_tonnes,facility_id,received_at,sort_notes,recycled_tonnes,reused_tonnes,residual_tonnes,residual_destination,evidence_ref,verified_at,demo,updated_at,outputs_json,facility_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,?,'[]',?)`).run('DBX-2045',isoAgo(144),'Ananya Rao','98••• 2104','6th Block, Koramangala','Koramangala','Concrete & brick',1.6,new Date(Date.now()-5*86400000).toISOString().slice(0,10),'recovered','Ravi N.','DEMO-TRUCK-01',isoAgo(130),1.55,'DEMO-FAC-01',receivedAt,'Legacy demo record: detailed output types and weights were not captured.',.85,.45,.25,'Demo residual destination · not verified','DEMO-FAC-TICKET-2045',verified,verified,'GreenLoop demo facility');audit('DBX-2045','recycler','GreenLoop demo facility','recovery_recorded','Seeded legacy weight split; no independent audit.','DEMO-FAC-TICKET-2045',1);
+}
+function seedProducts(){if(db.prepare('SELECT count(*) n FROM products').get().n)return;const data=[
+ ['DEMO-PROD-01','Recycled concrete aggregate · 10–20 mm','Recycled concrete aggregate','Demonstration listing. Ask the facility for source, grading and batch test evidence.','No test report attached to this demo listing. Confirm intended use with your project engineer.','GreenLoop demo facility',18,'◈','sage'],
+ ['DEMO-PROD-02','Recycled paver blocks','Pavers or kerbs','Demonstration listing for a downstream C&D product. Dimensions and strength are not specified.','No test report attached to this demo listing. Confirm product specification before use.','GreenLoop demo facility',6,'▦','rose'],
+ ['DEMO-PROD-03','Fine recycled aggregate','Fine aggregate / manufactured sand','Demonstration listing. Ask for gradation, source and relevant quality records.','No test report attached to this demo listing. Application suitability is not established.','GreenLoop demo facility',9,'≈','sand']
+ ];const put=db.prepare('INSERT INTO products(id,name,material_type,description,quality_note,quality_status,facility_name,inventory_tonnes,available,symbol,tint,created_at,demo) VALUES(?,?,?,?,?,?,?,?,1,?,?,?,1)');for(const p of data)put.run(p[0],p[1],p[2],p[3],p[4],'unverified',p[5],p[6],p[7],p[8],now());}
+function seedOrders(){if(db.prepare('SELECT count(*) n FROM orders').get().n)return;const products=db.prepare('SELECT id,name,facility_name FROM products WHERE demo=1 ORDER BY id').all();if(products.length<2)return;const stmt=db.prepare('INSERT INTO orders(id,created_at,updated_at,product_id,product_name,facility_name,citizen_name,phone,quantity_tonnes,intended_use,member_opt_in,status,demo) VALUES(?,?,?,?,?,?,?,?,?,?,1,?,1)');stmt.run('DEMO-ORD-01',isoAgo(30),isoAgo(1),products[0].id,products[0].name,products[0].facility_name,'Ananya Rao','98••• 2104',1,'Demonstration: planned garden pathway','in_use');stmt.run('DEMO-ORD-02',isoAgo(20),isoAgo(2),products[1].id,products[1].name,products[1].facility_name,'Cedar Build Studio','Demo contact',2,'Demonstration: small courtyard paving','delivered');}
+function seedLegacyRecoveryDemo(){if(db.prepare('SELECT 1 FROM bookings WHERE id=?').get('DBX-2045'))return;const receivedAt=isoAgo(116),verified=isoAgo(92);db.prepare(`INSERT INTO bookings(id,created_at,updated_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,operator_name,vehicle_id,pickup_at,received_tonnes,facility_id,received_at,sort_notes,recycled_tonnes,reused_tonnes,residual_tonnes,residual_destination,evidence_ref,verified_at,demo,outputs_json,facility_name) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,'[]',?)`).run('DBX-2045',isoAgo(144),verified,'Ananya Rao','98••• 2104','6th Block, Koramangala','Koramangala','Concrete & brick',1.6,new Date(Date.now()-5*86400000).toISOString().slice(0,10),'recovered','Ravi N.','DEMO-TRUCK-01',isoAgo(130),1.55,'DEMO-FAC-01',receivedAt,'Legacy demo record: detailed output types and weights were not captured.',.85,.45,.25,'Demo residual destination · not verified','DEMO-FAC-TICKET-2045',verified,'GreenLoop demo facility');for(const [hours,role,name,type,note] of [[144,'citizen','Ananya Rao','registered','Seeded demonstration pickup request.'],[138,'operator','Ravi N.','assigned','Seeded demo vehicle assignment.'],[130,'operator','Ravi N.','picked_up','Seeded demonstration collection.'],[126,'operator','Ravi N.','in_transit','Seeded demonstration transport status.'],[116,'recycler','GreenLoop demo facility','received','Seeded demonstration facility receipt.'],[92,'recycler','GreenLoop demo facility','recovery_recorded','Seeded legacy weight split; no independent audit.']])db.prepare('INSERT INTO events(booking_id,at,actor_role,actor_name,event_type,note,evidence_ref,demo) VALUES(?,?,?,?,?,?,?,1)').run('DBX-2045',isoAgo(hours),role,name,type,note,type==='recovery_recorded'?'DEMO-FAC-TICKET-2045':null);}
+seed();seedLegacyRecoveryDemo();seedProducts();seedOrders();
 
-const isoAgo = (hours) => new Date(Date.now() - hours * 3600000).toISOString();
-function seed() {
-  if (db.prepare('SELECT count(*) AS n FROM bookings').get().n) return;
-  const records = [
-    { id:'DBX-2048', created_at:isoAgo(24), citizen_name:'Ananya Rao', phone:'98••• 2104', address:'14th Cross, HSR Layout, Sector 2', locality:'HSR Layout', waste_type:'Concrete & brick', quantity_tonnes:1.8, preferred_date:new Date(Date.now()+86400000).toISOString().slice(0,10), status:'assigned', operator_name:'Kiran S.', vehicle_id:'KA 03 MN 4821', demo:1 },
-    { id:'DBX-2047', created_at:isoAgo(48), citizen_name:'R. Menon', phone:'98••• 7302', address:'8th Main, Indiranagar', locality:'Indiranagar', waste_type:'Mixed C&D', quantity_tonnes:2.4, preferred_date:new Date(Date.now()-86400000).toISOString().slice(0,10), status:'in_transit', operator_name:'Meera P.', vehicle_id:'KA 05 AB 1186', pickup_at:isoAgo(3), demo:1 },
-    { id:'DBX-2046', created_at:isoAgo(96), citizen_name:'S. Kumar', phone:'98••• 9190', address:'BTM 2nd Stage, Tavarekere Road', locality:'BTM Layout', waste_type:'Tiles & ceramics', quantity_tonnes:1.2, preferred_date:new Date(Date.now()-3*86400000).toISOString().slice(0,10), status:'processing', operator_name:'Ravi N.', vehicle_id:'KA 51 C 9042', pickup_at:isoAgo(52), received_tonnes:1.15, facility_id:'FAC-01', received_at:isoAgo(30), demo:1 }
-  ];
-  const insert = db.prepare(`INSERT INTO bookings (id,created_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,operator_name,vehicle_id,pickup_at,received_tonnes,facility_id,received_at,demo) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`);
-  for (const r of records) insert.run(r.id,r.created_at,r.citizen_name,r.phone,r.address,r.locality,r.waste_type,r.quantity_tonnes,r.preferred_date,r.status,r.operator_name??null,r.vehicle_id??null,r.pickup_at??null,r.received_tonnes??null,r.facility_id??null,r.received_at??null,r.demo);
-  const ev = db.prepare('INSERT INTO events (booking_id,at,actor_role,actor_name,event_type,note,demo) VALUES (?,?,?,?,?,?,1)');
-  ev.run('DBX-2048',isoAgo(24),'citizen','Ananya Rao','registered','Pickup request submitted; demo seed record.');
-  ev.run('DBX-2048',isoAgo(22),'operator','Dispatch desk','assigned','Assigned vehicle KA 03 MN 4821; demo seed record.');
-  ev.run('DBX-2047',isoAgo(48),'citizen','R. Menon','registered','Pickup request submitted; demo seed record.');
-  ev.run('DBX-2047',isoAgo(40),'operator','Meera P.','picked_up','Load collected; demo seed record.');
-  ev.run('DBX-2047',isoAgo(36),'operator','Meera P.','in_transit','En route to facility; demo seed record.');
-  ev.run('DBX-2046',isoAgo(96),'citizen','S. Kumar','registered','Pickup request submitted; demo seed record.');
-  ev.run('DBX-2046',isoAgo(70),'operator','Ravi N.','picked_up','Load collected; demo seed record.');
-  ev.run('DBX-2046',isoAgo(60),'facility','GreenLoop Facility','received','Facility receipt recorded; demo seed record.');
-  ev.run('DBX-2046',isoAgo(52),'facility','GreenLoop Facility','processing','Sorting started; demo seed record.');
-}
-seed();
-function seedRecoveryDemo() {
-  if (db.prepare('SELECT 1 FROM bookings WHERE id=?').get('DBX-2045')) return;
-  const receivedAt=isoAgo(116),verifiedAt=isoAgo(92);
-  db.prepare(`INSERT INTO bookings (id,created_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,operator_name,vehicle_id,pickup_at,received_tonnes,facility_id,received_at,sort_notes,recycled_tonnes,reused_tonnes,residual_tonnes,residual_destination,evidence_ref,verified_at,demo)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1)`)
-    .run('DBX-2045',isoAgo(144),'Ananya Rao','98••• 2104','6th Block, Koramangala','Koramangala','Concrete & brick',1.6,new Date(Date.now()-5*86400000).toISOString().slice(0,10),'recovered','Ravi N.','KA 03 MN 4821',isoAgo(130),1.55,'FAC-01',receivedAt,'Crushed aggregate and reusable masonry separated.',0.85,0.45,0.25,'Authorized inert waste facility · demo','DEMO-FAC-TICKET-2045',verifiedAt);
-  const ev=db.prepare('INSERT INTO events (booking_id,at,actor_role,actor_name,event_type,note,evidence_ref,demo) VALUES (?,?,?,?,?,?,?,1)');
-  ev.run('DBX-2045',isoAgo(144),'citizen','Ananya Rao','registered','Pickup request submitted; seeded demo record.',null);
-  ev.run('DBX-2045',isoAgo(138),'operator','Ravi N.','assigned','Assigned vehicle KA 03 MN 4821; seeded demo record.',null);
-  ev.run('DBX-2045',isoAgo(130),'operator','Ravi N.','picked_up','Load collected; seeded demo record.',null);
-  ev.run('DBX-2045',isoAgo(126),'operator','Ravi N.','in_transit','En route to facility; seeded demo record.',null);
-  ev.run('DBX-2045',receivedAt,'facility','GreenLoop Facility','received','Facility receipt: 1.55 tonnes at FAC-01; seeded demo record.','DEMO-FAC-TICKET-2045');
-  ev.run('DBX-2045',verifiedAt,'facility','GreenLoop Facility','recovery_recorded','Material balance: 0.85 t recycled, 0.45 t reused, 0.25 t residual; seeded demo record.','DEMO-FAC-TICKET-2045');
-}
-seedRecoveryDemo();
+const STATUS={requested:'Request received',assigned:'Vehicle assigned',picked_up:'Picked up',in_transit:'In transit',received:'Facility received',processing:'Processing',recovered:'Recovery recorded',closed:'Closed'};
+const wasteTypes=new Set(['Concrete & brick','Mixed C&D','Tiles & ceramics','Soil & rubble','Wood & metals','Other C&D']);
+const outputTypes=new Set(['Recycled concrete aggregate','Recycled mixed aggregate','Fine aggregate / manufactured sand','Bricks, blocks or tiles','Pavers or kerbs','Manufactured soil','Other tested product']);
+const materialTypes=new Set([...outputTypes,'Recovered steel / metal','Salvaged timber']);
+function jsonParse(x,fallback){try{return x?JSON.parse(x):fallback}catch{return fallback}}
+function bookingDetails(row){return {...row,location:jsonParse(row.location_json,null),outputs:jsonParse(row.outputs_json,[]),events:db.prepare('SELECT at,actor_role,actor_name,event_type,note,evidence_ref,demo FROM events WHERE booking_id=? ORDER BY at').all(row.id),status_label:STATUS[row.status]||row.status,updated_at:row.updated_at||row.verified_at||row.created_at};}
+function getBookings(citizenName=null){const rows=db.prepare('SELECT * FROM bookings ORDER BY created_at DESC').all();return rows.filter(row=>!citizenName||row.citizen_name.toLowerCase()===citizenName.toLowerCase()).map(bookingDetails)}
+let airCache={checkedAt:null,records:[],error:'OpenAQ API key is not configured.',source:'OpenAQ v3 · upstream sensor reports'};
+async function refreshAir(){const key=process.env.OPENAQ_API_KEY;if(!key){airCache={checkedAt:now(),records:[],error:'OpenAQ API key is not configured.',source:'OpenAQ v3 · upstream sensor reports'};return airCache}try{const base='https://api.openaq.org/v3/locations',coordinates=process.env.OPENAQ_COORDINATES||'12.9716,77.5946',radius=Math.min(25000,Math.max(1,Number(process.env.OPENAQ_RADIUS_METERS||25000))),response=await fetch(`${base}?coordinates=${encodeURIComponent(coordinates)}&radius=${radius}&limit=100`,{headers:{'X-API-Key':key},signal:AbortSignal.timeout(12000)});if(!response.ok)throw new Error(`OpenAQ locations returned HTTP ${response.status}.`);const data=await response.json(),locations=(data.results||[]).slice().sort((a,b)=>(a.distance??Infinity)-(b.distance??Infinity)).slice(0,12);const groups=await Promise.all(locations.map(async loc=>{try{const r=await fetch(`${base}/${loc.id}/latest?limit=100`,{headers:{'X-API-Key':key},signal:AbortSignal.timeout(12000)});if(!r.ok)return[];const res=await r.json(),sensors=new Map((loc.sensors||[]).map(s=>[s.id,s.parameter]));return(res.results||[]).map(x=>({x,p:sensors.get(x.sensorsId)})).filter(y=>['pm25','pm10'].includes(y.p?.name)).map(({x,p})=>({location_id:loc.id,location_name:loc.name||`Station ${loc.id}`,locality:loc.locality||null,latitude:x.coordinates?.latitude??loc.coordinates?.latitude??null,longitude:x.coordinates?.longitude??loc.coordinates?.longitude??null,parameter:p.name,value:x.value,unit:p.units||null,observed_at:x.datetime?.utc||null,source:'OpenAQ v3 · upstream sensor measurement'}))}catch{return[]}}));const records=groups.flat().filter(x=>x.observed_at&&Number.isFinite(Number(x.value))),checkedAt=now();db.exec('BEGIN');try{db.prepare('DELETE FROM air_observations').run();const ins=db.prepare('INSERT INTO air_observations(fetched_at,location_id,location_name,locality,latitude,longitude,parameter,value,unit,observed_at,source) VALUES(?,?,?,?,?,?,?,?,?,?,?)');for(const x of records)ins.run(checkedAt,x.location_id,x.location_name,x.locality,x.latitude,x.longitude,x.parameter,x.value,x.unit,x.observed_at,x.source);db.exec('COMMIT')}catch(e){db.exec('ROLLBACK');throw e}airCache={checkedAt,records,error:records.length?null:'OpenAQ returned no recent PM2.5 or PM10 measurements for nearby stations.',source:'OpenAQ v3 · upstream sensor reports'};}catch(e){airCache={checkedAt:now(),records:[],error:`Live source unavailable: ${e.message}`,source:'OpenAQ v3 · upstream sensor reports'}}return airCache;}
+if(process.env.OPENAQ_API_KEY)setInterval(()=>refreshAir(),10*60*1000).unref();
 
-const statuses = ['requested','assigned','picked_up','in_transit','received','processing','recovered','closed'];
-const statusLabel = { requested:'Request received', assigned:'Vehicle assigned', picked_up:'Picked up', in_transit:'In transit', received:'Facility received', processing:'Processing', recovered:'Recovery recorded', closed:'Closed' };
-const roleNames = { citizen:'Citizen', operator:'Operator', recycler:'Recycler', authority:'City operations' };
-const wasteTypes = new Set(['Concrete & brick','Mixed C&D','Tiles & ceramics','Soil & rubble','Wood & metals','Other C&D']);
-const canUseApi = (role, method, path) => {
-  const read = ['GET /api/summary','GET /api/bookings'].includes(`${method} ${path}`);
-  if (role==='citizen') return read || (method==='POST'&&path==='/api/bookings') || (method==='GET'&&path==='/api/air') || (method==='POST'&&path==='/api/air/refresh');
-  if (role==='operator') return read || (method==='PATCH'&&/^\/api\/bookings\/[^/]+\/status$/.test(path));
-  if (role==='recycler') return read || (method==='PATCH'&&/^\/api\/bookings\/[^/]+\/(receipt|processing)$/.test(path));
-  if (role==='authority') return read || (method==='GET'&&path==='/api/air') || (method==='POST'&&path==='/api/air/refresh');
-  return false;
-};
-
-function send(res, code, body, type='application/json; charset=utf-8') {
-  res.writeHead(code, { 'content-type': type, 'cache-control':'no-store', 'x-content-type-options':'nosniff' });
-  res.end(type.startsWith('application/json') ? JSON.stringify(body) : body);
-}
-async function bodyJson(req) {
-  let raw=''; for await (const chunk of req) { raw += chunk; if (raw.length > 20000) throw new Error('Request body is too large.'); }
-  try { return raw ? JSON.parse(raw) : {}; } catch { throw new Error('Request body must be valid JSON.'); }
-}
-function audit(id, role, name, type, note, evidence=null) {
-  db.prepare('INSERT INTO events (booking_id,at,actor_role,actor_name,event_type,note,evidence_ref,demo) VALUES (?,?,?,?,?,?,?,0)')
-    .run(id,new Date().toISOString(),role,name,type,note,evidence);
-}
-function bookingDetails(row) {
-  return { ...row, events:db.prepare('SELECT at,actor_role,actor_name,event_type,note,evidence_ref,demo FROM events WHERE booking_id=? ORDER BY at').all(row.id), status_label:statusLabel[row.status] || row.status };
-}
-function getBookings(citizenName=null) {
-  const rows=db.prepare('SELECT * FROM bookings ORDER BY created_at DESC').all();
-  return rows.filter(row=>!citizenName||row.citizen_name.toLowerCase()===citizenName.toLowerCase()).map(bookingDetails);
-}
-
-let airCache = { checkedAt:null, records:[], error:null };
-async function refreshAir() {
-  const apiKey=process.env.OPENAQ_API_KEY;
-  if (!apiKey) { airCache={checkedAt:new Date().toISOString(),records:[],error:'OpenAQ API key is not configured.'}; return airCache; }
-  try {
-    const base='https://api.openaq.org/v3/locations';
-    const coordinates=process.env.OPENAQ_COORDINATES || '12.9716,77.5946';
-    const radius=Math.min(25000,Math.max(1,Number(process.env.OPENAQ_RADIUS_METERS || 25000)));
-    const url=`${base}?coordinates=${encodeURIComponent(coordinates)}&radius=${radius}&limit=100`;
-    const response=await fetch(url,{headers:{'X-API-Key':apiKey},signal:AbortSignal.timeout(12000)});
-    if (!response.ok) throw new Error(`OpenAQ locations returned HTTP ${response.status}.`);
-    const result=await response.json();
-    const locations=(result.results || []).slice().sort((a,b)=>(a.distance??Infinity)-(b.distance??Infinity)).slice(0,12);
-    const latest=await Promise.all(locations.map(async loc=>{
-      try {
-        const r=await fetch(`${base}/${loc.id}/latest?limit=100`,{headers:{'X-API-Key':apiKey},signal:AbortSignal.timeout(12000)});
-        if(!r.ok) return [];
-        const data=await r.json();
-        const sensors=new Map((loc.sensors||[]).map(sensor=>[sensor.id,sensor.parameter]));
-        return (data.results || []).map(x=>({reading:x,parameter:sensors.get(x.sensorsId)})).filter(x=>['pm25','pm10'].includes(x.parameter?.name)).map(({reading:x,parameter:p})=>({ location_id:loc.id, location_name:loc.name || `Station ${loc.id}`, locality:loc.locality || null, latitude:x.coordinates?.latitude ?? loc.coordinates?.latitude ?? null, longitude:x.coordinates?.longitude ?? loc.coordinates?.longitude ?? null, parameter:p.name, value:x.value, unit:p.units || null, observed_at:x.datetime?.utc || null, source:'OpenAQ v3 · upstream sensor measurement' }));
-      } catch { return []; }
-    }));
-    const fetchedAt=new Date().toISOString();
-    const records=latest.flat().filter(x=>x.observed_at && Number.isFinite(Number(x.value)));
-    const insert=db.prepare('INSERT INTO air_observations (fetched_at,location_id,location_name,locality,latitude,longitude,parameter,value,unit,observed_at,source) VALUES (?,?,?,?,?,?,?,?,?,?,?)');
-    const txn=db.exec.bind(db);
-    db.exec('BEGIN');
-    try { db.prepare('DELETE FROM air_observations').run(); for(const x of records) insert.run(fetchedAt,x.location_id,x.location_name,x.locality,x.latitude,x.longitude,x.parameter,x.value,x.unit,x.observed_at,x.source); db.exec('COMMIT'); }
-    catch(e){db.exec('ROLLBACK');throw e;}
-    airCache={checkedAt:fetchedAt,records,error:records.length?null:'OpenAQ returned no recent PM2.5 or PM10 measurements for nearby stations.'};
-  } catch(e) { airCache={checkedAt:new Date().toISOString(),records:[],error:`Live source unavailable: ${e.message}`}; }
-  return airCache;
-}
-setInterval(()=>{ if(process.env.OPENAQ_API_KEY) refreshAir(); }, 10*60*1000).unref();
+function send(res,code,body,type='application/json; charset=utf-8',headers={}){res.writeHead(code,{'content-type':type,'cache-control':'no-store','x-content-type-options':'nosniff',...headers});res.end(type.startsWith('application/json')?JSON.stringify(body):body)}
+async function bodyJson(req){let raw='';for await(const chunk of req){raw+=chunk;if(raw.length>20000)throw Object.assign(new Error('Request body is too large.'),{status:413})}try{return raw?JSON.parse(raw):{}}catch{throw Object.assign(new Error('Request body must be valid JSON.'),{status:400})}}
+function cookieValue(req,name){for(const part of String(req.headers.cookie||'').split(';')){const [key,...v]=part.trim().split('=');if(key===name)return decodeURIComponent(v.join('='))}return''}
+function adminSession(req){const secret=process.env.DEBRIX_ADMIN_PASSCODE;if(!secret)return false;const m=cookieValue(req,'debrix_admin').match(/^(\d{10})\.(\d{10})\.([a-f0-9]{64})$/);if(!m)return false;const issued=Number(m[1]),expires=Number(m[2]),current=Math.floor(Date.now()/1000);if(issued>current+60||expires<=current||expires-issued>28800)return false;const expected=createHmac('sha256',secret).update(`DEBRIX-v1:${issued}:${expires}`).digest('hex');return timingSafeEqual(Buffer.from(expected,'hex'),Buffer.from(m[3],'hex'))}
+function safeEquals(a,b){return timingSafeEqual(createHash('sha256').update(String(a)).digest(),createHash('sha256').update(String(b)).digest())}
+function sessionCookie(){const secret=process.env.DEBRIX_ADMIN_PASSCODE,issued=Math.floor(Date.now()/1000),expires=issued+28800,sig=createHmac('sha256',secret).update(`DEBRIX-v1:${issued}:${expires}`).digest('hex');return `debrix_admin=${issued}.${expires}.${sig}; Path=/; HttpOnly; SameSite=Strict; Max-Age=28800`}
+let loginAttempts=new Map();function loginBlocked(ip){const rec=loginAttempts.get(ip);if(!rec)return false;if(Date.now()-rec.since>900000){loginAttempts.delete(ip);return false}return rec.count>=8}function noteLogin(ip,success){if(success){loginAttempts.delete(ip);return}const r=loginAttempts.get(ip);if(!r||Date.now()-r.since>900000)loginAttempts.set(ip,{since:Date.now(),count:1});else r.count++}
+function roleFor(req){const role=String(req.headers['x-demo-role']||'citizen');if(role==='citizen')return role;if(['operator','recycler'].includes(role)&&adminSession(req))return role;return null}
+function validateCoords(lat,lon){if(lat==null&&lon==null)return null;lat=Number(lat);lon=Number(lon);if(!Number.isFinite(lat)||!Number.isFinite(lon)||lat < -90||lat > 90||lon < -180||lon > 180)throw Object.assign(new Error('Location coordinates are invalid.'),{status:400});return{latitude:lat,longitude:lon}}
+function validateBooking(d){for(const k of ['citizen_name','phone','address','locality','waste_type','preferred_date'])if(typeof d[k]!=='string'||!d[k].trim())throw Object.assign(new Error(`${k.replaceAll('_',' ')} is required.`),{status:400});const digits=d.phone.replace(/\D/g,'');if(d.citizen_name.length>100||d.address.length>250||d.locality.length>80)throw Object.assign(new Error('Name, address or locality is too long.'),{status:400});if(!/^[+()\-\s\d]{8,20}$/.test(d.phone.trim())||digits.length<8||digits.length>15)throw Object.assign(new Error('Enter a valid contact number with 8 to 15 digits.'),{status:400});if(!wasteTypes.has(d.waste_type))throw Object.assign(new Error('Choose a supported C&D material type.'),{status:400});const qty=Number(d.quantity_tonnes);if(!Number.isFinite(qty)||qty<.1||qty>40)throw Object.assign(new Error('Load size must be between 0.1 and 40 tonnes.'),{status:400});if(!/^\d{4}-\d{2}-\d{2}$/.test(d.preferred_date)||Number.isNaN(Date.parse(d.preferred_date))||d.preferred_date<now().slice(0,10))throw Object.assign(new Error('Choose a valid future pickup date.'),{status:400});return qty}
+function validOutputs(d,received){const outputs=Array.isArray(d.outputs)?d.outputs:[];if(!outputs.length)throw Object.assign(new Error('Enter at least one recycled product output.'),{status:400});let recycled=0;const clean=outputs.map(o=>{if(!outputTypes.has(o.material_type))throw Object.assign(new Error('Choose a supported product output.'),{status:400});const tonnes=Number(o.tonnes);if(!Number.isFinite(tonnes)||tonnes<0)throw Object.assign(new Error('Output weights must be zero or more.'),{status:400});recycled+=tonnes;return{material_type:o.material_type,tonnes}});const reused=Number(d.reused_tonnes||0),residual=Number(d.residual_tonnes||0);if([recycled,reused,residual].some(x=>!Number.isFinite(x)||x<0)||Math.abs(recycled+reused+residual-received)>.03)throw Object.assign(new Error('Recycled outputs + reuse + residual must balance facility receipt (±0.03 t).'),{status:400});if(residual>0&&!String(d.residual_destination||'').trim())throw Object.assign(new Error('Record the residual destination.'),{status:400});if(!String(d.evidence_ref||'').trim())throw Object.assign(new Error('Add a supporting evidence reference.'),{status:400});return{outputs:clean,recycled,reused,residual}}
 
 const server=http.createServer(async(req,res)=>{
-  const url=new URL(req.url,'http://localhost');
-  if(req.method==='GET' && url.pathname.startsWith('/assets/')) {
-    const path=resolve(PUBLIC,url.pathname.slice(1)); if(!path.startsWith(PUBLIC)) return send(res,403,{error:'Forbidden'});
-    try { const data=readFileSync(path); const types={'.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml'}; return send(res,200,data,types[extname(path)]||'application/octet-stream'); } catch { return send(res,404,{error:'Not found'}); }
-  }
-  if(req.method==='GET' && url.pathname==='/') { try{return send(res,200,readFileSync(join(PUBLIC,'index.html'),'utf8'),'text/html; charset=utf-8');}catch{return send(res,500,{error:'App assets missing'});} }
-  const role=req.headers['x-demo-role'];
-  if(url.pathname.startsWith('/api/')) {
-    if(!canUseApi(role,req.method,url.pathname)) return send(res,403,{error:'This action is unavailable for the selected demo role.'});
-  }
-  try {
-    if(req.method==='GET' && url.pathname==='/api/summary') {
-      const records=getBookings(role==='citizen'?String(req.headers['x-demo-user']||'Ananya Rao') : null);
-      const rows=db.prepare('SELECT status,COUNT(*) count FROM bookings GROUP BY status').all();
-      const counts=Object.fromEntries(rows.map(x=>[x.status,x.count]));
-      const total=role==='citizen'?records.length:db.prepare('SELECT COUNT(*) n FROM bookings').get().n;
-      const recovery=role==='citizen'?records.reduce((a,b)=>({recovered:a.recovered+Number(b.recycled_tonnes||0)+Number(b.reused_tonnes||0),residual:a.residual+Number(b.residual_tonnes||0)}),{recovered:0,residual:0}):db.prepare('SELECT COALESCE(SUM(recycled_tonnes+reused_tonnes),0) recovered,COALESCE(SUM(residual_tonnes),0) residual FROM bookings').get();
-      return send(res,200,{generated_at:new Date().toISOString(),total,counts,recovered_tonnes:recovery.recovered,residual_tonnes:recovery.residual,bookings:records,air:airCache,workflow_statuses:statuses,seeded:records.some(b=>b.demo)|| (role!=='citizen'&&db.prepare('SELECT COUNT(*) n FROM bookings WHERE demo=1').get().n>0)});
-    }
-    if(req.method==='GET' && url.pathname==='/api/bookings') {
-      const search=(url.searchParams.get('q')||'').trim();
-      const records=search ? getBookings(role==='citizen'?String(req.headers['x-demo-user']||'Ananya Rao'):null).filter(b=>[b.id,b.locality,b.citizen_name,b.status].some(v=>String(v||'').toLowerCase().includes(search.toLowerCase()))) : getBookings(role==='citizen'?String(req.headers['x-demo-user']||'Ananya Rao'):null);
-      return send(res,200,{items:records});
-    }
-    if(req.method==='POST' && url.pathname==='/api/bookings') {
-      const d=await bodyJson(req);
-      const required=['citizen_name','phone','address','locality','waste_type','preferred_date'];
-      for(const k of required) if(typeof d[k]!=='string' || !d[k].trim()) return send(res,400,{error:`${k.replaceAll('_',' ')} is required.`});
-      if(d.citizen_name.trim().length>100||d.address.trim().length>250||d.locality.trim().length>80) return send(res,400,{error:'Name, address, or locality exceeds its allowed length.'});
-      const phoneDigits=d.phone.replace(/\D/g,'');
-      if(!/^[+()\-\s\d]{8,20}$/.test(d.phone.trim())||phoneDigits.length<8||phoneDigits.length>15) return send(res,400,{error:'Enter a valid contact number with 8 to 15 digits.'});
-      if(!wasteTypes.has(d.waste_type)) return send(res,400,{error:'Choose a supported C&D material type.'});
-      const quantity=Number(d.quantity_tonnes);
-      if(!Number.isFinite(quantity)||quantity<0.1||quantity>40) return send(res,400,{error:'Load size must be between 0.1 and 40 tonnes.'});
-      if(!/^\d{4}-\d{2}-\d{2}$/.test(d.preferred_date)||Number.isNaN(Date.parse(d.preferred_date))) return send(res,400,{error:'Choose a valid pickup date.'});
-      if(d.preferred_date<new Date().toISOString().slice(0,10)) return send(res,400,{error:'Pickup date cannot be in the past.'});
-      const id=`DBX-${randomUUID().slice(0,8).toUpperCase()}`; const now=new Date().toISOString();
-      db.prepare('INSERT INTO bookings (id,created_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,demo) VALUES (?,?,?,?,?,?,?,?,?,?,0)')
-       .run(id,now,d.citizen_name.trim(),d.phone.trim(),d.address.trim(),d.locality.trim(),d.waste_type,quantity,d.preferred_date,'requested');
-      const citizenName=String(req.headers['x-demo-user']||d.citizen_name).trim().slice(0,100);
-      db.prepare('UPDATE bookings SET citizen_name=? WHERE id=?').run(citizenName,id);
-      audit(id,role,citizenName,'registered',`Pickup request for ${quantity.toFixed(1)} tonnes of ${d.waste_type}.`);
-      return send(res,201,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(id))});
-    }
-    if(req.method==='PATCH' && url.pathname.startsWith('/api/bookings/') && url.pathname.endsWith('/status')) {
-      if(role!=='operator') return send(res,403,{error:'Operator role required.'});
-      const id=decodeURIComponent(url.pathname.split('/')[3]); const d=await bodyJson(req); const row=db.prepare('SELECT * FROM bookings WHERE id=?').get(id);
-      if(!row)return send(res,404,{error:'Pickup not found.'});
-      const next=d.status; const transitions={requested:['assigned'],assigned:['picked_up'],picked_up:['in_transit'],in_transit:['received']};
-      if(!transitions[row.status]?.includes(next))return send(res,409,{error:`Cannot move ${row.status} to ${next}.`});
-      const operator=String(d.operator_name||'Field operator').trim().slice(0,80); const vehicle=String(d.vehicle_id||'').trim().slice(0,30);
-      if(next==='assigned'&&(!operator||!vehicle))return send(res,400,{error:'Operator name and vehicle ID are required for assignment.'});
-      db.prepare(`UPDATE bookings SET status=?,operator_name=COALESCE(?,operator_name),vehicle_id=COALESCE(?,vehicle_id),pickup_at=CASE WHEN ?='picked_up' THEN ? ELSE pickup_at END WHERE id=?`)
-        .run(next,next==='assigned'?operator:null,next==='assigned'?vehicle:null,next,new Date().toISOString(),id);
-      audit(id,role,operator,next,`${statusLabel[next]}${vehicle?` · ${vehicle}`:''}.`);
-      return send(res,200,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(id))});
-    }
-    if(req.method==='PATCH' && url.pathname.startsWith('/api/bookings/') && url.pathname.endsWith('/receipt')) {
-      if(role!=='recycler')return send(res,403,{error:'Recycler role required.'});
-      const id=decodeURIComponent(url.pathname.split('/')[3]);const d=await bodyJson(req);const row=db.prepare('SELECT * FROM bookings WHERE id=?').get(id);
-      const received=Number(d.received_tonnes);
-      if(!row)return send(res,404,{error:'Pickup not found.'});
-      if(row.status!=='in_transit')return send(res,409,{error:'Only an in-transit load can be received.'});
-      if(!Number.isFinite(received)||received<=0||received>row.quantity_tonnes*1.15)return send(res,400,{error:'Received weight must be positive and within 15% of the registered load.'});
-      if(!d.facility_id||String(d.facility_id).length>60)return send(res,400,{error:'Facility identifier is required.'});
-      const now=new Date().toISOString();db.prepare("UPDATE bookings SET status='received',received_tonnes=?,facility_id=?,received_at=? WHERE id=?").run(received,d.facility_id,now,id);
-      audit(id,role,String(d.facility_name||'Processing facility').slice(0,100),'received',`Facility receipt: ${received.toFixed(2)} tonnes at ${d.facility_id}.`,d.evidence_ref||null);
-      return send(res,200,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(id))});
-    }
-    if(req.method==='PATCH' && url.pathname.startsWith('/api/bookings/') && url.pathname.endsWith('/processing')) {
-      if(role!=='recycler')return send(res,403,{error:'Recycler role required.'});
-      const id=decodeURIComponent(url.pathname.split('/')[3]);const d=await bodyJson(req);const row=db.prepare('SELECT * FROM bookings WHERE id=?').get(id);
-      if(!row)return send(res,404,{error:'Pickup not found.'});if(!['received','processing'].includes(row.status))return send(res,409,{error:'Load must be received before processing can be recorded.'});
-      const recycled=Number(d.recycled_tonnes||0),reused=Number(d.reused_tonnes||0),residual=Number(d.residual_tonnes||0),total=recycled+reused+residual;
-      if([recycled,reused,residual].some(x=>!Number.isFinite(x)||x<0)||!row.received_tonnes||Math.abs(total-row.received_tonnes)>0.03)return send(res,400,{error:'Recycled + reused + residual weights must balance the facility-received weight (±0.03 t).'});
-      if(residual>0&&!String(d.residual_destination||'').trim())return send(res,400,{error:'Record the authorized residual destination.'});
-      if(!String(d.evidence_ref||'').trim())return send(res,400,{error:'Add a supporting evidence reference (document ID, URL, or local register ID).'});
-      const now=new Date().toISOString();const state=total===0?'processing':'recovered';
-      db.prepare('UPDATE bookings SET status=?,sort_notes=?,recycled_tonnes=?,reused_tonnes=?,residual_tonnes=?,residual_destination=?,evidence_ref=?,verified_at=? WHERE id=?')
-       .run(state,String(d.sort_notes||'').slice(0,500),recycled,reused,residual,String(d.residual_destination||'').trim()||null,String(d.evidence_ref).trim(),now,id);
-      audit(id,role,String(d.facility_name||'Processing facility').slice(0,100),'recovery_recorded',`Material balance: ${recycled.toFixed(2)} t recycled, ${reused.toFixed(2)} t reused, ${residual.toFixed(2)} t residual.`,String(d.evidence_ref).trim());
-      return send(res,200,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(id))});
-    }
-    if(req.method==='GET' && url.pathname==='/api/air') return send(res,200,{...airCache,configured:Boolean(process.env.OPENAQ_API_KEY),source:'OpenAQ v3 · upstream sensor data',limits:'Particulate concentrations are shown as reported by stations; this prototype does not compute or certify an official AQI.'});
-    if(req.method==='POST' && url.pathname==='/api/air/refresh') {
-      if(role!=='citizen'&&role!=='authority')return send(res,403,{error:'This action is unavailable for the selected demo role.'});
-      return send(res,200,{...await refreshAir(),configured:Boolean(process.env.OPENAQ_API_KEY),source:'OpenAQ v3 · upstream sensor data'});
-    }
-    if(url.pathname.startsWith('/api/'))return send(res,404,{error:'API route not found.'});
-    return send(res,404,{error:'Not found.'});
-  } catch(e) { console.error(e); return send(res,500,{error:e.message||'Unexpected server error.'}); }
+ const url=new URL(req.url,'http://localhost'),pathname=decodeURIComponent(url.pathname);
+ try{
+  if(req.method==='GET'&&!pathname.startsWith('/api/')){const rel=pathname==='/'?'index.html':pathname.replace(/^\/+/,''),path=resolve(PUBLIC,rel);if(path!==PUBLIC&&!path.startsWith(PUBLIC+sep))return send(res,403,{error:'Forbidden'});try{const data=readFileSync(path),types={'.css':'text/css; charset=utf-8','.js':'text/javascript; charset=utf-8','.svg':'image/svg+xml','.html':'text/html; charset=utf-8'};return send(res,200,data,types[extname(path)]||'application/octet-stream')}catch{return send(res,404,{error:'Not found'})}}
+  if(req.method==='GET'&&pathname==='/api/session')return send(res,200,{authenticated:adminSession(req),passcodeConfigured:Boolean(process.env.DEBRIX_ADMIN_PASSCODE)});
+  if(req.method==='POST'&&pathname==='/api/session'){const ip=String(req.socket.remoteAddress||'unknown');if(loginBlocked(ip))return send(res,429,{error:'Too many passcode attempts. Wait 15 minutes before trying again.'});const d=await bodyJson(req),secret=process.env.DEBRIX_ADMIN_PASSCODE;if(!secret)return send(res,503,{error:'Administrator access is not configured. Set DEBRIX_ADMIN_PASSCODE in the server environment.'});const ok=typeof d.passcode==='string'&&safeEquals(d.passcode,secret);noteLogin(ip,ok);if(!ok)return send(res,401,{error:'Passcode not recognised.'});return send(res,200,{authenticated:true,expires_in:28800},'application/json; charset=utf-8',{'set-cookie':sessionCookie()})}
+  if(req.method==='DELETE'&&pathname==='/api/session')return send(res,200,{authenticated:false},'application/json; charset=utf-8',{'set-cookie':'debrix_admin=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0'});
+  if(!pathname.startsWith('/api/'))return send(res,404,{error:'Not found.'});
+  const role=roleFor(req);if(!role)return send(res,401,{error:'Administrator passcode required for this workspace.'});const user=String(req.headers['x-demo-user']||'Ananya Rao');
+  if(req.method==='GET'&&pathname==='/api/summary'){const records=getBookings(role==='citizen'?user:null),rows=role==='citizen'?records:getBookings(),counts={};for(const b of rows)counts[b.status]=(counts[b.status]||0)+1;const total=rows.length,recovered=rows.reduce((s,b)=>s+Number(b.recycled_tonnes||0)+Number(b.reused_tonnes||0),0),residual=rows.reduce((s,b)=>s+Number(b.residual_tonnes||0),0);return send(res,200,{generated_at:now(),total,counts,recovered_tonnes:recovered,residual_tonnes:residual,bookings:records,air:airCache,seeded:rows.some(b=>b.demo)})}
+  if(req.method==='GET'&&pathname==='/api/bookings'){const q=(url.searchParams.get('q')||'').toLowerCase(),items=getBookings(role==='citizen'?user:null).filter(b=>!q||[b.id,b.locality,b.citizen_name,b.status,b.waste_type].some(v=>String(v||'').toLowerCase().includes(q)));return send(res,200,{items})}
+  if(req.method==='GET'&&pathname==='/api/products'){const items=db.prepare('SELECT * FROM products ORDER BY name').all().map(p=>({...p,available:Boolean(p.available),demo:Boolean(p.demo)}));return send(res,200,{items})}
+  if(req.method==='GET'&&pathname==='/api/orders'){const rows=db.prepare('SELECT * FROM orders ORDER BY created_at DESC').all().filter(o=>role!=='citizen'||o.citizen_name.toLowerCase()===user.trim().toLowerCase()).map(o=>({...o,member_opt_in:Boolean(o.member_opt_in),demo:Boolean(o.demo),stock_deducted:Boolean(o.stock_deducted)}));return send(res,200,{items:rows})}
+  if(req.method==='GET'&&pathname==='/api/air')return send(res,200,{...airCache,configured:Boolean(process.env.OPENAQ_API_KEY),source:'OpenAQ v3 · upstream sensor reports',limits:'Upstream particulate reports only; not a DEBRIX official AQI.'});
+  if(req.method==='POST'&&pathname==='/api/air/refresh'){if(role!=='citizen')return send(res,403,{error:'AIRWISE refresh is available from the citizen portal.'});return send(res,200,{...await refreshAir(),configured:Boolean(process.env.OPENAQ_API_KEY)});}
+  if(req.method==='POST'&&pathname==='/api/bookings'){if(role!=='citizen')return send(res,403,{error:'Create pickups from the citizen portal.'});const d=await bodyJson(req),qty=validateBooking(d),coords=validateCoords(d.latitude,d.longitude),created=now(),bookingId=id('DBX');db.prepare(`INSERT INTO bookings(id,created_at,updated_at,citizen_name,phone,address,locality,waste_type,quantity_tonnes,preferred_date,status,demo,instructions,pickup_latitude,pickup_longitude,outputs_json) VALUES(?,?,?,?,?,?,?,?,?,?,'requested',0,?,?,?,'[]')`).run(bookingId,created,created,d.citizen_name.trim(),d.phone.trim(),d.address.trim(),d.locality.trim(),d.waste_type,qty,d.preferred_date,String(d.instructions||'').trim().slice(0,500),coords?.latitude??null,coords?.longitude??null);audit(bookingId,'citizen',d.citizen_name.trim(),'registered',`Pickup request for ${qty.toFixed(1)} tonnes of ${d.waste_type}.`);return send(res,201,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(bookingId))})}
+  if(req.method==='POST'&&pathname==='/api/orders'){if(role!=='citizen')return send(res,403,{error:'Create product requests from the citizen market.'});const d=await bodyJson(req),qty=Number(d.quantity_tonnes);if(!String(d.citizen_name||'').trim()||!String(d.phone||'').trim()||String(d.citizen_name).length>100||String(d.phone).length>20)throw Object.assign(new Error('Name and phone are required.'),{status:400});if(!Number.isFinite(qty)||qty<.1||qty>100)throw Object.assign(new Error('Enter a product quantity from 0.1 to 100 tonnes.'),{status:400});const p=db.prepare('SELECT * FROM products WHERE id=? AND available=1').get(d.product_id);if(!p)throw Object.assign(new Error('Product listing is no longer available.'),{status:404});if(qty>p.inventory_tonnes)throw Object.assign(new Error('Requested quantity exceeds listed stock.'),{status:400});const orderId=id('ORD'),created=now();db.prepare('INSERT INTO orders(id,created_at,updated_at,product_id,product_name,facility_name,citizen_name,phone,quantity_tonnes,intended_use,member_opt_in,status,demo) VALUES(?,?,?,?,?,?,?,?,?,?,?,\'requested\',0)').run(orderId,created,created,p.id,p.name,p.facility_name,d.citizen_name.trim(),d.phone.trim(),qty,String(d.intended_use||'').trim().slice(0,180),d.member_opt_in?1:0);return send(res,201,{item:db.prepare('SELECT * FROM orders WHERE id=?').get(orderId)})}
+  if(req.method==='POST'&&pathname==='/api/products'){if(role!=='recycler')return send(res,403,{error:'Recycler administrator access is required to publish inventory.'});const d=await bodyJson(req),stock=Number(d.inventory_tonnes);if(!String(d.name||'').trim()||!materialTypes.has(d.material_type)||!String(d.facility_name||'').trim())throw Object.assign(new Error('Enter a product name, supported material and facility name.'),{status:400});if(!Number.isFinite(stock)||stock<.1||stock>100000)throw Object.assign(new Error('Enter available stock from 0.1 tonnes upward.'),{status:400});const productId=id('PROD'),created=now();db.prepare('INSERT INTO products(id,name,material_type,description,quality_note,quality_status,facility_name,inventory_tonnes,available,symbol,tint,created_at,demo) VALUES(?,?,?,?,?,\'unverified\',?,?,1,\'◈\',\'sage\',?,0)').run(productId,d.name.trim().slice(0,120),d.material_type,String(d.description||'').trim().slice(0,400),String(d.quality_note||'No application-specific test evidence attached.').trim().slice(0,500),d.facility_name.trim().slice(0,100),stock,created);return send(res,201,{item:db.prepare('SELECT * FROM products WHERE id=?').get(productId)})}
+  const productMatch=pathname.match(/^\/api\/products\/([^/]+)$/);if(req.method==='PATCH'&&productMatch){if(role!=='recycler')return send(res,403,{error:'Recycler administrator access is required to update inventory.'});const d=await bodyJson(req),stock=Number(d.inventory_tonnes);if(!Number.isFinite(stock)||stock<0||stock>100000)throw Object.assign(new Error('Stock must be zero or more tonnes.'),{status:400});const updated=db.prepare('UPDATE products SET inventory_tonnes=?,available=?,updated_at=? WHERE id=?').run(stock,stock>0?1:0,now(),productMatch[1]);if(!updated.changes)throw Object.assign(new Error('Product listing not found.'),{status:404});return send(res,200,{item:db.prepare('SELECT * FROM products WHERE id=?').get(productMatch[1])})}
+  const orderMatch=pathname.match(/^\/api\/orders\/([^/]+)$/);if(req.method==='PATCH'&&orderMatch){const d=await bodyJson(req),order=db.prepare('SELECT * FROM orders WHERE id=?').get(orderMatch[1]);if(!order)throw Object.assign(new Error('Product request not found.'),{status:404});if(role==='recycler'&&order.status==='requested'&&d.status==='confirmed'){db.prepare("UPDATE orders SET status='confirmed',updated_at=? WHERE id=?").run(now(),order.id)}else if(role==='recycler'&&order.status==='confirmed'&&d.status==='delivered'){if(!order.stock_deducted){const upd=db.prepare('UPDATE products SET inventory_tonnes=inventory_tonnes-?,available=CASE WHEN inventory_tonnes-?>0 THEN 1 ELSE 0 END,updated_at=? WHERE id=? AND inventory_tonnes>=?').run(order.quantity_tonnes,order.quantity_tonnes,now(),order.product_id,order.quantity_tonnes);if(!upd.changes)throw Object.assign(new Error('Stock is insufficient for this order.'),{status:409})}db.prepare("UPDATE orders SET status='delivered',delivered_at=?,updated_at=?,stock_deducted=1 WHERE id=?").run(now(),now(),order.id)}else if(role==='citizen'&&d.status==='in_use'&&order.status==='delivered'&&order.citizen_name.toLowerCase()===user.trim().toLowerCase()){db.prepare("UPDATE orders SET status='in_use',in_use_at=?,updated_at=? WHERE id=?").run(now(),now(),order.id)}else throw Object.assign(new Error('This order update is not available for this account.'),{status:403});return send(res,200,{item:db.prepare('SELECT * FROM orders WHERE id=?').get(order.id)})}
+  const bookingMatch=pathname.match(/^\/api\/bookings\/([^/]+)\/(status|receipt|processing|location)$/);if(bookingMatch){const bookingId=bookingMatch[1],action=bookingMatch[2],d=await bodyJson(req),row=db.prepare('SELECT * FROM bookings WHERE id=?').get(bookingId);if(!row)throw Object.assign(new Error('Pickup not found.'),{status:404});let status=row.status;
+   if(action==='status'){if(role==='operator'){const transitions={requested:['assigned'],assigned:['picked_up'],picked_up:['in_transit']};if(!transitions[row.status]?.includes(d.status))throw Object.assign(new Error(`Cannot move ${row.status} to ${d.status}.`),{status:409})}else if(role==='recycler'){if(!((row.status==='received'&&d.status==='processing')||(row.status==='recovered'&&d.status==='closed')))throw Object.assign(new Error(`Recycler cannot move ${row.status} to ${d.status}.`),{status:409})}else throw Object.assign(new Error('Administrator access is required.'),{status:403});const operator=String(d.operator_name||row.operator_name||'Field operator').trim().slice(0,80),vehicle=String(d.vehicle_id||row.vehicle_id||'').trim().slice(0,30);if(d.status==='assigned'&&(!operator||!vehicle))throw Object.assign(new Error('Operator name and vehicle ID are required.'),{status:400});db.prepare('UPDATE bookings SET status=?,operator_name=COALESCE(?,operator_name),vehicle_id=COALESCE(?,vehicle_id),pickup_at=CASE WHEN ?=\'picked_up\' THEN ? ELSE pickup_at END,updated_at=? WHERE id=?').run(d.status,d.status==='assigned'?operator:null,d.status==='assigned'?vehicle:null,d.status,now(),now(),bookingId);audit(bookingId,role,String(d.facility_name||operator).slice(0,100),d.status,`${STATUS[d.status]}${vehicle?` · ${vehicle}`:''}${String(d.note||'').trim()?` · ${String(d.note).trim().slice(0,160)}`:''}.`);status=d.status;
+   }else if(action==='receipt'){if(role!=='recycler')throw Object.assign(new Error('Recycler administrator access is required.'),{status:403});const received=Number(d.received_tonnes);if(row.status!=='in_transit')throw Object.assign(new Error('Only an in-transit load can be received.'),{status:409});if(!Number.isFinite(received)||received<=0||received>row.quantity_tonnes*1.15)throw Object.assign(new Error('Received weight must be positive and within 15% of the registered estimate.'),{status:400});if(!String(d.facility_id||'').trim()||!String(d.evidence_ref||'').trim())throw Object.assign(new Error('Facility ID and weighbridge evidence reference are required.'),{status:400});db.prepare("UPDATE bookings SET status='received',received_tonnes=?,facility_id=?,facility_name=?,received_at=?,receipt_evidence=?,updated_at=? WHERE id=?").run(received,String(d.facility_id).trim().slice(0,60),String(d.facility_name||'Processing facility').trim().slice(0,100),now(),String(d.evidence_ref).trim().slice(0,180),now(),bookingId);audit(bookingId,role,String(d.facility_name||'Processing facility').slice(0,100),'received',`Facility receipt: ${received.toFixed(2)} tonnes at ${d.facility_id}.`,String(d.evidence_ref).trim());status='received';
+   }else if(action==='processing'){if(role!=='recycler')throw Object.assign(new Error('Recycler administrator access is required.'),{status:403});if(row.status!=='processing'||!Number(row.received_tonnes))throw Object.assign(new Error('Start processing after facility receipt before saving recovery.'),{status:409});const split=validOutputs(d,Number(row.received_tonnes)),verified=now();db.prepare("UPDATE bookings SET status='recovered',sort_notes=?,recycled_tonnes=?,reused_tonnes=?,residual_tonnes=?,residual_destination=?,evidence_ref=?,verified_at=?,updated_at=?,outputs_json=?,facility_name=? WHERE id=?").run(String(d.sort_notes||'').trim().slice(0,500),split.recycled,split.reused,split.residual,String(d.residual_destination||'').trim().slice(0,180)||null,String(d.evidence_ref).trim().slice(0,180),verified,verified,JSON.stringify(split.outputs),String(d.facility_name||row.facility_name||'Processing facility').trim().slice(0,100),bookingId);audit(bookingId,role,String(d.facility_name||row.facility_name||'Processing facility').slice(0,100),'recovery_recorded',`Material balance: ${split.recycled.toFixed(2)} t recycled across ${split.outputs.length} output(s), ${split.reused.toFixed(2)} t reused, ${split.residual.toFixed(2)} t residual.`,String(d.evidence_ref).trim());status='recovered';
+   }else{if(role!=='operator')throw Object.assign(new Error('Operator administrator access is required to share a truck location.'),{status:403});if(row.status!=='in_transit')throw Object.assign(new Error('Truck location can be shared while a load is in transit.'),{status:409});const coords=validateCoords(d.latitude,d.longitude),accuracy=Number(d.accuracy_m);if(!coords||!Number.isFinite(accuracy)||accuracy<0||accuracy>10000)throw Object.assign(new Error('GPS coordinates and accuracy are required.'),{status:400});db.prepare('UPDATE bookings SET location_json=?,updated_at=? WHERE id=?').run(JSON.stringify({...coords,accuracy_m:Math.round(accuracy),updated_at:now(),source:'Browser device GPS · operator opted in',demo:Boolean(row.demo)}),now(),bookingId)}return send(res,200,{item:bookingDetails(db.prepare('SELECT * FROM bookings WHERE id=?').get(bookingId))})}
+  return send(res,404,{error:'API route not found.'});
+ }catch(e){console.error(e);return send(res,e.status||500,{error:e.message||'Unexpected server error.'})}
 });
-
-const port=Number(process.env.PORT||4173);
-server.listen(port,'127.0.0.1',()=>console.log(`AIRWISE × DEBRIX running at http://127.0.0.1:${port}`));
+const port=Number(process.env.PORT||4173);server.listen(port,'127.0.0.1',()=>console.log(`DEBRIX running at http://127.0.0.1:${port}`));
 
