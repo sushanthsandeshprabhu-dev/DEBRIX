@@ -8,9 +8,12 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test",
-    "check": "node --check server.mjs && node --check \"api/[...path].mjs\" && node --check public/app.js && node --check test/workflow.test.mjs"
+    "check": "node --check server.mjs && node --check \"api/[...path].mjs\" && node --check api/postgres-store.mjs && node --check scripts/migrate-db.mjs && node --check scripts/import-blob-state.mjs && node --check public/app.js && node --check test/workflow.test.mjs && node --check test/postgres-store.test.mjs",
+    "db:migrate": "node scripts/migrate-db.mjs",
+    "db:import-blob": "node scripts/import-blob-state.mjs"
   },
   "dependencies": {
-    "@vercel/blob": "^2.3.0"
+    "@vercel/blob": "^2.3.0",
+    "postgres": "^3.4.9"
   }
 }

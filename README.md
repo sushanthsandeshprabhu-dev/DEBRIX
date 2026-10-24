@@ -1,66 +1,20 @@
 # DEBRIX
 
-DEBRIX coordinates construction and demolition (C&D) waste pickup, transport, facility receipt, processing and recovery. It is a conventional non-AI web application: bookings, status transitions and recovery totals are validated by deterministic server-side rules.
+DEBRIX is a non-AI C&D waste pickup and recovery workflow for citizens, operators, transporters, and recycling facilities. It records a pickup request, assignment, transport events, facility receipt, processing, recovered outputs, residual destination, and customer-visible status history.
 
-## Workflow
+This is a demonstration application, not a municipal service, verified recycler directory, payment processor, or independent audit system. Seeded records and unverified product listings are labelled **DEMO**.
 
-1. **Customer** submits material, estimated quantity, pickup address, preferred date, instructions and a required pickup pin. A booking access token lets the same customer review private booking details and evidence.
-2. **Operator** reviews a request and either rejects it with a recorded reason or assigns it to a configured transporter, vehicle, pickup date and facility.
-3. **Transporter** sees only bookings assigned to that account and records pickup, transit and optional device GPS updates.
-4. **Recycler** confirms the assigned facility's receipt, actual weight, discrepancy note where the received quantity differs by more than 5%, and supporting evidence. The recycler then records sorting, recovered outputs and residual destination.
-5. **Customer** sees the timestamped status history and completion evidence.
+## Portals
 
-The map uses Leaflet and OpenStreetMap tiles. A location update is only recorded when the transporter explicitly shares browser GPS; no simulated tracking is presented as live.
+- **Citizen:** submit a pickup request, select a map location, track it with a private booking key, and browse recycled-material listings.
+- **Operator:** review bookings, schedule and assign transporter/vehicle/facility, reject with a reason, and monitor operations.
+- **Transporter:** view assigned work and report pickup, transit, and device GPS updates.
+- **Recycler:** confirm received weights, report discrepancies, record processing and recovered products, and close the chain of custody.
 
-## Architecture and current limits
+Staff access is role-bound and configured with `DEBRIX_STAFF_ACCOUNTS_JSON`. Customer access uses the booking's private tracking key. The server validates role permissions and workflow transitions.
 
-- The browser app is plain HTML, CSS and JavaScript in `public/`.
-- `server.mjs` is the local Node HTTP server. It persists local workflow data in SQLite at `data/debrix.sqlite`, enables foreign keys and WAL, and writes booking events with actor, role and timestamp.
-- `api/[...path].mjs` is the Vercel serverless adapter. It stores a shared JSON document in Vercel Blob. It is persistent, but it is not a relational database and does not provide the same transaction or constraint guarantees as SQLite. The local and Vercel adapters also still contain duplicated route logic.
-- Seeded bookings and offers are marked **DEMO**. New records are not labelled demo. Demo records are illustrative and are not official municipal or regulatory data.
-- Staff sessions are signed, role-bound, HTTP-only cookies. With `DEBRIX_STAFF_ACCOUNTS_JSON`, accounts are matched by role, username and passcode, and transporter assignments must reference a configured transporter account.
-- Customer access is token-based rather than a conventional registered customer account. Keep the access token private; anyone with it can access that booking.
+## Architecture
 
-This is a functional demo/staging application, not yet a full-scale production data platform. Before high-volume or regulated deployment, migrate the Vercel adapter to a relational database with transactions, foreign keys, migrations and row-level authorization; replace customer access tokens with a supported customer identity flow if required; and verify facility, transporter and evidence policies for the operating jurisdiction.
-
-## Run locally
-
-Requires Node.js 24 or newer.
-
-1. Install dependencies: `npm install`.
-2. Copy `.env.example` to `.env` and configure staff accounts. Do not commit `.env`.
-3. Start the server: `npm start`.
-4. Open [http://127.0.0.1:4173](http://127.0.0.1:4173).
-
-On first run, the local database is seeded with clearly marked demo records. To reset a local demo database, stop the server and remove `data/debrix.sqlite` and its `-wal` / `-shm` files. This also removes records entered locally.
-
-## Staff account configuration
-
-For deployment, prefer an explicit account list and a unique session signing secret. Set these as Vercel environment variables for every environment that should use the application.
-
-```json
-[
-  {"role":"operator","username":"dispatch1","passcode":"replace-with-a-long-random-secret"},
-  {"role":"transporter","username":"driver1","passcode":"replace-with-a-different-long-secret"},
-  {"role":"recycler","username":"facility1","passcode":"replace-with-another-long-secret"}
-]
-```
-
-Set that JSON as `DEBRIX_STAFF_ACCOUNTS_JSON`. Each passcode must contain at least 12 characters. Account-list mode disables passcode-only fallback. Give every staff account a unique username. The legacy `DEBRIX_ADMIN_PASSCODE` can sign in to the operator role only; transporter and recycler roles require their own passcode or an explicit account entry. Use a random, stable `DEBRIX_SESSION_SECRET`; changing it signs out all staff sessions.
-
-For a local single-operator demo, `DEBRIX_ADMIN_PASSCODE` is still accepted. Role-specific passcodes can be set with `DEBRIX_OPERATOR_PASSCODE`, `DEBRIX_TRANSPORTER_PASSCODE`, and `DEBRIX_RECYCLER_PASSCODE`. Use the explicit account list for real assignment ownership.
-
-## Verification
-
-```sh
-npm run check
-npm test
-```
-
-The workflow tests launch an isolated SQLite server and exercise authentication, role scoping, assignment, transporter updates, GPS ownership, receipt variance, evidence access, recovery balance, closure and rejection. They do not write to a configured production database.
-
-## Deploying to Vercel
-
-The Vercel function requires the `@vercel/blob` integration and a valid `BLOB_READ_WRITE_TOKEN`. Configure the staff variables above in Project Settings Ú·^~)Ş¶ Environment Variables, then deploy. Keep separate credentials between Preview and Production. The Vercel adapter uses Blob-backed document persistence, so it is appropriate for the current demo/staging scale only; do not treat it as transactional storage for concurrent production dispatch until it is migrated to a database.
-
-Optional `PORT` defaults to `4173` locally. Optional `DEBRIX_DATA_DIR` selects the local SQLite data directory. No AI provider key, model, chatbot, vector store or external analytics service is used.
+- Frontend: static HTML, CSS, and browser JavaScript served by Vercel.
+- API: Vercel Node.js Functions in `api/[...path].mjs`.
+- Production/preview workflow records: Neon Postgres. Bookings, events, products, orders, metadata, and small evidence files are kept in ¶»§q«^uÈ¹•Ü‰½½­¥¹Ì½È•Ù¥‘•¹”ÕÁ±½…‘Ì¸((ŒŒ%µÁ½ÉĞ•á¥ÍÑ¥¹œ	±½ˆÉ•½É‘Ì()Q¡”	±½ˆÍÑ½É”İ…ÌÍÕÍÁ•¹‘•…™Ñ•ÈÑ¡”Y•É•°!½‰‰äÕÍ…”±¥µ¥Ğİ…Ì•á••‘•¸%ÑÌ½¹Ñ•¹ÑÌÉ•µ…¥¸¥¸Ñ¡…ĞÍÑ½É”°‰ÕĞÑ¡•ä…¹¹½Ğ‰”É•…Õ¹Ñ¥°Y•É•°É•ÍÑ½É•Ì…•ÍÌ¸Q¡”…ÁÁ±¥…Ñ¥½¸¹¼±½¹•È‘•Á•¹‘Ì½¸	±½ˆ™½È¹•Üİ½É­™±½ÜİÉ¥Ñ•Ì¸()™Ñ•ÈÉ•ÍÑ½É¥¹œ	±½ˆ…•ÍÌ…¹ÁÕ±±¥¹œÑ¡”É•±•Ù…¹ĞÙ…É¥…‰±•Ì¥¹Ñ¼€¹•¹Ø¹±½…±€°ÉÕ¸Ñ¡”¹½¸µ‘•ÍÑÉÕÑ¥Ù”¥µÁ½ÉĞè()Í )¹½‘”€´µ•¹Øµ™¥±”ô¹•¹Ø¹±½…°ÍÉ¥ÁÑÌ½¥µÁ½ÉĞµ‰±½ˆµÍÑ…Ñ”¹µ©Ì)€()Q¡”ÍÉ¥ÁĞÑÉ¥•Ì‘•‰É¥à½ÍÑ…Ñ”¹©Í½¹€…¹‘•‰É¥àµ…¥Éİ¥Í”½ÍÑ…Ñ”¹©Í½¹€‰ä‘•™…Õ±Ğ¸A…ÍÌÑ¡”•á…ĞÁÉ¥Ù…Ñ”	±½ˆÁ…Ñ¡¹…µ”¥˜å½ÕÈÍ¹…ÁÍ¡½Ğ¥Ì•±Í•İ¡•É”è()Í )¹½‘”€´µ•¹Øµ™¥±”ô¹•¹Ø¹±½…°ÍÉ¥ÁÑÌ½¥µÁ½ÉĞµ‰±½ˆµÍÑ…Ñ”¹µ©Ì€‘•‰É¥àµÁÉ•Ù¥•Ü½A1=e59Q}-d½ÍÑ…Ñ”¹©Í½¸œ)€()Q¡”ÍÉ¥ÁĞÉ•Á½ÉÑÌ„ÍÕÍÁ•¹‘•Í½ÕÉ”ÍÑ½É”İ¥Ñ¡½ÕĞ¡…¹¥¹œ¥Ğ¸%Ğ‘½•Ì¹½Ğ‘•±•Ñ”Ñ¡”½É¥¥¹…°	±½ˆÍ¹…ÁÍ¡½Ğ¸I•Ù¥•Ü¥µÁ½ÉÑ•‘•µ¼…¹±¥Ù”É•½É‘Ì‰•™½É”ÕÍ¥¹œÑ¡”‘…Ñ…‰…Í”™½È„ÁÕ‰±¥Œ‘•µ½¹ÍÑÉ…Ñ¥½¸¸((ŒŒY•É¥™¥…Ñ¥½¸()Í )¹Á´ÉÕ¸¡•¬)¹Á´Ñ•ÍĞ)€()Q¡”Ñ•ÍÑÌ±…Õ¹ …¸¥Í½±…Ñ•ME1¥Ñ”Í•ÉÙ•È…¹•á•É¥Í”ÍÑ…™˜µÉ½±”Í½Á¥¹œ°‰½½­¥¹œÉ•…Ñ¥½¸°…ÍÍ¥¹µ•¹Ğ°ÑÉ…¹ÍÁ½ÉĞ°É•å±•ÈÉ••¥ÁĞ½É•½Ù•Éä°•Ù¥‘•¹”¡…¹‘±¥¹œ°‰½½­¥¹œ±½ÍÕÉ”°…¹É•©•Ñ¥½¸¸Q¡•ä‘¼¹½Ğ½¹¹•ĞÑ¼9•½¸¸™Ñ•È½¹¹•Ñ¥¹œ9•½¸°Ù•É¥™äÑ¡”Y•É•°ÁÉ•Ù¥•Ü•¹Ñ¼•¹…¹½¹™¥É´É•½É‘ÌÍÕÉÙ¥Ù”„É•‘•Á±½ä¸((ŒŒ1¥µ¥Ñ…Ñ¥½¹Ì((´9•½¸É•‘•¹Ñ¥…±Ì°Ñ¡”Í¡•µ„µ¥É…Ñ¥½¸°…¹„Y•É•°‘•Á±½åµ•¹ĞµÕÍĞ‰”½¹™¥ÕÉ•‰•™½É”Ñ¡”¡½ÍÑ•A$…¸ÕÍ”A½ÍÑÉ•Ì¸(´á¥ÍÑ¥¹œ	±½ˆ‘…Ñ„…¹¹½ĞŠÚîÆ­y
