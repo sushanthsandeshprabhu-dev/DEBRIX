@@ -13,5 +13,5 @@ jobs:
         with:
           node-version: 24
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: node --check server.mjs && node --check "api/[...path].mjs" && node --check public/app.js
+      - run: node --check server.mjs && find api -name '*.mjs' -print0 | xargs -0 -n1 node --check && node --check public/app.js
       - run: npm test
