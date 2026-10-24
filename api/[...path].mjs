@@ -41,7 +41,8 @@ function normalise(state){if(!Array.isArray(state.bookings))state.bookings=[];if
 
 async function readState(path=STATE_PATH){
  for(let attempt=0;attempt<3;attempt++){
-  const metadata=await head(path);
+  let metadata;
+  try{metadata=await head(path);}catch(error){if(error?.name==='BlobNotFoundError'||error?.status===404||String(error?.message||'').toLowerCase().includes('does not exist'))return null;throw error;}
   const value=await get(path,{access:'private',useCache:false});
   if(!value)return null;
   const getEtag=String(value.blob.etag||'').replace(/^W\//,'');
