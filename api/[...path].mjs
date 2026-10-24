@@ -1,4 +1,4 @@
-import { get, put, del, BlobPreconditionFailedError } from '@vercel/blob';
+import { get, head, put, del, BlobPreconditionFailedError } from '@vercel/blob';
 import { createHmac, createHash, timingSafeEqual, randomUUID, randomBytes } from 'node:crypto';
 
 const previewKey=String(process.env.VERCEL_DEPLOYMENT_ID||process.env.VERCEL_GIT_COMMIT_SHA||'preview').replace(/[^a-zA-Z0-9_-]/g,'').slice(0,64)||'preview';
@@ -39,7 +39,19 @@ function seedState(){
 }
 function normalise(state){if(!Array.isArray(state.bookings))state.bookings=[];if(!Array.isArray(state.events))state.events=[];if(!Array.isArray(state.products))state.products=[];if(!Array.isArray(state.orders))state.orders=[];if(!state.products.length){state.products=[{id:'DEMO-PROD-01',name:'Recycled concrete aggregate · 10–20 mm',material_type:'Recycled concrete aggregate',description:'Demonstration listing. Ask the facility for source, grading and batch test evidence.',quality_note:'No test report attached to this demo listing. Confirm intended use with your project engineer.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:18,available:true,symbol:'◈',tint:'sage',demo:1},{id:'DEMO-PROD-02',name:'Recycled paver blocks',material_type:'Pavers or kerbs',description:'Demonstration listing for a downstream C&D product. Dimensions and strength are not specified.',quality_note:'No test report attached to this demo listing. Confirm product specification before use.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:6,available:true,symbol:'▦',tint:'rose',demo:1},{id:'DEMO-PROD-03',name:'Fine recycled aggregate',material_type:'Fine aggregate / manufactured sand',description:'Demonstration listing. Ask for gradation, source and relevant quality records.',quality_note:'No test report attached to this demo listing. Application suitability is not established.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:9,available:true,symbol:'≈',tint:'sand',demo:1}];}if(!state.orders.length){const p=state.products;state.orders=[{id:'DEMO-ORD-01',created_at:isoAgo(30),product_id:p[0].id,product_name:p[0].name,facility_name:p[0].facility_name,citizen_name:'Ananya Rao',phone:'98••• 2104',quantity_tonnes:1,intended_use:'Demonstration: planned garden pathway',member_opt_in:true,status:'in_use',demo:1},{id:'DEMO-ORD-02',created_at:isoAgo(20),product_id:(p[1]||p[0]).id,product_name:(p[1]||p[0]).name,facility_name:(p[1]||p[0]).facility_name,citizen_name:'Cedar Build Studio',phone:'Demo contact',quantity_tonnes:2,intended_use:'Demonstration: small courtyard paving',member_opt_in:true,status:'delivered',demo:1}];}for(const b of state.bookings){b.outputs=Array.isArray(b.outputs)?b.outputs:[];b.evidence=Array.isArray(b.evidence)?b.evidence:[];b.updated_at??=b.verified_at??b.created_at;}state.version=3;delete state.air;return state;}
 
-async function readState(path=STATE_PATH){const value=await get(path,{access:'private',useCache:false});if(!value)return null;const json=await new Response(value.stream).text();return {state:normalise(JSON.parse(json)),etag:value.blob.etag};}
+async function readState(path=STATE_PATH){
+ for(let attempt=0;attempt<3;attempt++){
+  const value=await get(path,{access:'private',useCache:false});
+  if(!value)return null;
+  const metadata=await head(path,{access:'private'});
+  if(metadata?.etag&&metadata.etag===value.blob.etag){
+   const json=await new Response(value.stream).text();
+   return {state:normalise(JSON.parse(json)),etag:metadata.etag};
+  }
+  try{await value.stream.cancel();}catch{}
+ }
+ throw new HttpError(503,'Persistent DEBRIX store changed while being read. Please retry.');
+}
 async function ensureState(){for(let attempt=0;attempt<3;attempt++){const current=await readState();if(current)return current;if(process.env.VERCEL_ENV==='production'){const legacy=await readState(LEGACY_STATE_PATH);if(legacy){const clean=normalise(legacy.state);delete clean.air;await put(STATE_PATH,JSON.stringify(clean),{access:'private',contentType:'application/json',allowOverwrite:false});try{await del(LEGACY_STATE_PATH,{access:'private'});}catch{}continue;}}try{await put(STATE_PATH,JSON.stringify(seedState()),{access:'private',contentType:'application/json',allowOverwrite:false});}catch(error){if(attempt===2&&!String(error?.message||'').toLowerCase().includes('already'))throw error;}}const current=await readState();if(!current)throw new Error('Persistent DEBRIX store could not be initialized.');return current;}
 async function mutate(change){for(let attempt=0;attempt<8;attempt++){const current=await ensureState(),draft=structuredClone(current.state),result=change(draft);draft.updated_at=now();try{await put(STATE_PATH,JSON.stringify(draft),{access:'private',contentType:'application/json',allowOverwrite:true,ifMatch:current.etag});return result;}catch(error){if(error instanceof BlobPreconditionFailedError||error?.name==='BlobPreconditionFailedError'||error?.status===412)continue;throw error;}}throw new HttpError(409,'Records changed repeatedly. Please retry this action.');}
 const MAX_EVIDENCE_BYTES=2*1024*1024;
