@@ -44,7 +44,7 @@ async function readState(path=STATE_PATH){
   const value=await get(path,{access:'private',useCache:false});
   if(!value)return null;
   const metadata=await head(path);
-  const getEtag=String(value.blob.etag||'').replace(/^W\\//,'');
+  const getEtag=String(value.blob.etag||'').replace(/^W\//,'');
   if(metadata?.etag&&metadata.etag===getEtag){
    const json=await new Response(value.stream).text();
    return {state:normalise(JSON.parse(json)),etag:metadata.etag};
