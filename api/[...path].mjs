@@ -159,6 +159,6 @@ if(path==='/api/summary'&&req.method==='GET'){const current=await ensureState();
    }
    return details(s,row);
   });}catch(error){if(uploadedEvidence?.pathname){try{await del(uploadedEvidence.pathname,{access:'private'});}catch{}}throw error;}return json(res,200,{item});
- }catch(error){if(!error?.status||error.status>=500)console.error(error);return json(res,error.status||500,{error:error.message||'Unexpected server error.'});}
+ }catch(error){const storageUnavailable=/Vercel Blob: This store has been suspended/i.test(String(error?.message||''));if(!error?.status||error.status>=500)console.error(error);return json(res,storageUnavailable?503:error.status||500,{error:storageUnavailable?'Persistent storage is unavailable. Reactivate or reconnect the Vercel Blob store before retrying.':error.message||'Unexpected server error.'});}
 }
 
