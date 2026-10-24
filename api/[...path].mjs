@@ -41,9 +41,9 @@ function normalise(state){if(!Array.isArray(state.bookings))state.bookings=[];if
 
 async function readState(path=STATE_PATH){
  for(let attempt=0;attempt<3;attempt++){
+  const metadata=await head(path);
   const value=await get(path,{access:'private',useCache:false});
   if(!value)return null;
-  const metadata=await head(path);
   const getEtag=String(value.blob.etag||'').replace(/^W\//,'');
   if(metadata?.etag&&metadata.etag===getEtag){
    const json=await new Response(value.stream).text();
