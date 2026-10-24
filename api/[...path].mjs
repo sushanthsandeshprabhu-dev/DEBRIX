@@ -43,6 +43,7 @@ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
 const retryDelay=attempt=>Math.min(500,30*(2**Math.min(attempt,4)))+Math.floor(Math.random()*75);
 const isMissingBlob=error=>error?.name==='BlobNotFoundError'||error?.status===404||String(error?.message||'').toLowerCase().includes('does not exist');
 const isAlreadyExists=error=>error?.status===409||error?.status===412||/already exists/i.test(String(error?.message||''));
+const isWriteConflict=error=>error instanceof BlobPreconditionFailedError||error?.name==='BlobPreconditionFailedError'||error?.status===412||/conditional request cannot succeed|conflicting operation|precondition failed|etag mismatch/i.test(String(error?.message||''));
 async function readState(path=STATE_PATH){
  for(let attempt=0;attempt<5;attempt++){
   let metadata;
@@ -77,7 +78,7 @@ async function mutate(change){
  for(let attempt=0;attempt<12;attempt++){
   const current=await ensureState(),draft=structuredClone(current.state),result=change(draft);draft.updated_at=now();
   try{await put(STATE_PATH,JSON.stringify(draft),{access:'private',contentType:'application/json',allowOverwrite:true,ifMatch:current.etag});return result;}
-  catch(error){if(error instanceof BlobPreconditionFailedError||error?.name==='BlobPreconditionFailedError'||error?.status===412){await pause(retryDelay(attempt));continue;}throw error;}
+  catch(error){if(isWriteConflict(error)){await pause(retryDelay(attempt));continue;}throw error;}
  }
  throw new HttpError(409,'Records changed repeatedly. Please retry this action.');
 }
