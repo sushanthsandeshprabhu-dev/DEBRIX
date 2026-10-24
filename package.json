@@ -7,7 +7,8 @@
   },
   "scripts": {
     "start": "node server.mjs",
-    "test": "node --test"
+    "test": "node --test",
+    "check": "node --check server.mjs && node --check \"api/[...path].mjs\" && node --check public/app.js && node --check test/workflow.test.mjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.0"
