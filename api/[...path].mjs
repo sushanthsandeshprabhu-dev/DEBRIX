@@ -39,23 +39,49 @@ function seedState(){
 }
 function normalise(state){if(!Array.isArray(state.bookings))state.bookings=[];if(!Array.isArray(state.events))state.events=[];if(!Array.isArray(state.products))state.products=[];if(!Array.isArray(state.orders))state.orders=[];if(!state.products.length){state.products=[{id:'DEMO-PROD-01',name:'Recycled concrete aggregate · 10–20 mm',material_type:'Recycled concrete aggregate',description:'Demonstration listing. Ask the facility for source, grading and batch test evidence.',quality_note:'No test report attached to this demo listing. Confirm intended use with your project engineer.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:18,available:true,symbol:'◈',tint:'sage',demo:1},{id:'DEMO-PROD-02',name:'Recycled paver blocks',material_type:'Pavers or kerbs',description:'Demonstration listing for a downstream C&D product. Dimensions and strength are not specified.',quality_note:'No test report attached to this demo listing. Confirm product specification before use.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:6,available:true,symbol:'▦',tint:'rose',demo:1},{id:'DEMO-PROD-03',name:'Fine recycled aggregate',material_type:'Fine aggregate / manufactured sand',description:'Demonstration listing. Ask for gradation, source and relevant quality records.',quality_note:'No test report attached to this demo listing. Application suitability is not established.',quality_status:'unverified',facility_name:'GreenLoop demo facility',inventory_tonnes:9,available:true,symbol:'≈',tint:'sand',demo:1}];}if(!state.orders.length){const p=state.products;state.orders=[{id:'DEMO-ORD-01',created_at:isoAgo(30),product_id:p[0].id,product_name:p[0].name,facility_name:p[0].facility_name,citizen_name:'Ananya Rao',phone:'98••• 2104',quantity_tonnes:1,intended_use:'Demonstration: planned garden pathway',member_opt_in:true,status:'in_use',demo:1},{id:'DEMO-ORD-02',created_at:isoAgo(20),product_id:(p[1]||p[0]).id,product_name:(p[1]||p[0]).name,facility_name:(p[1]||p[0]).facility_name,citizen_name:'Cedar Build Studio',phone:'Demo contact',quantity_tonnes:2,intended_use:'Demonstration: small courtyard paving',member_opt_in:true,status:'delivered',demo:1}];}for(const b of state.bookings){b.outputs=Array.isArray(b.outputs)?b.outputs:[];b.evidence=Array.isArray(b.evidence)?b.evidence:[];b.updated_at??=b.verified_at??b.created_at;}state.version=3;delete state.air;return state;}
 
+const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+const retryDelay=attempt=>Math.min(500,30*(2**Math.min(attempt,4)))+Math.floor(Math.random()*75);
+const isMissingBlob=error=>error?.name==='BlobNotFoundError'||error?.status===404||String(error?.message||'').toLowerCase().includes('does not exist');
+const isAlreadyExists=error=>error?.status===409||error?.status===412||/already exists/i.test(String(error?.message||''));
+const isWriteConflict=error=>error instanceof BlobPreconditionFailedError||error?.name==='BlobPreconditionFailedError'||error?.status===412||/conditional request cannot succeed|conflicting operation|precondition failed|etag mismatch/i.test(String(error?.message||''));
 async function readState(path=STATE_PATH){
- for(let attempt=0;attempt<3;attempt++){
+ for(let attempt=0;attempt<5;attempt++){
   let metadata;
-  try{metadata=await head(path);}catch(error){if(error?.name==='BlobNotFoundError'||error?.status===404||String(error?.message||'').toLowerCase().includes('does not exist'))return null;throw error;}
-  const value=await get(path,{access:'private',useCache:false});
-  if(!value)return null;
+  try{metadata=await head(path);}catch(error){if(isMissingBlob(error))return null;throw error;}
+  let value;
+  try{value=await get(path,{access:'private',useCache:false});}catch(error){if(isMissingBlob(error)){await pause(retryDelay(attempt));continue;}throw error;}
+  if(!value){await pause(retryDelay(attempt));continue;}
   const getEtag=String(value.blob.etag||'').replace(/^W\//,'');
   if(metadata?.etag&&metadata.etag===getEtag){
    const json=await new Response(value.stream).text();
    return {state:normalise(JSON.parse(json)),etag:metadata.etag};
   }
   try{await value.stream.cancel();}catch{}
+  if(attempt<4)await pause(retryDelay(attempt));
  }
  throw new HttpError(503,'Persistent DEBRIX store changed while being read. Please retry.');
 }
-async function ensureState(){for(let attempt=0;attempt<3;attempt++){const current=await readState();if(current)return current;if(process.env.VERCEL_ENV==='production'){const legacy=await readState(LEGACY_STATE_PATH);if(legacy){const clean=normalise(legacy.state);delete clean.air;await put(STATE_PATH,JSON.stringify(clean),{access:'private',contentType:'application/json',allowOverwrite:false});try{await del(LEGACY_STATE_PATH,{access:'private'});}catch{}continue;}}try{await put(STATE_PATH,JSON.stringify(seedState()),{access:'private',contentType:'application/json',allowOverwrite:false});}catch(error){if(attempt===2&&!String(error?.message||'').toLowerCase().includes('already'))throw error;}}const current=await readState();if(!current)throw new Error('Persistent DEBRIX store could not be initialized.');return current;}
-async function mutate(change){for(let attempt=0;attempt<8;attempt++){const current=await ensureState(),draft=structuredClone(current.state),result=change(draft);draft.updated_at=now();try{await put(STATE_PATH,JSON.stringify(draft),{access:'private',contentType:'application/json',allowOverwrite:true,ifMatch:current.etag});return result;}catch(error){if(error instanceof BlobPreconditionFailedError||error?.name==='BlobPreconditionFailedError'||error?.status===412)continue;throw error;}}throw new HttpError(409,'Records changed repeatedly. Please retry this action.');}
+async function ensureState(){
+ for(let attempt=0;attempt<10;attempt++){
+  const current=await readState();if(current)return current;
+  try{
+   const legacy=process.env.VERCEL_ENV==='production'?await readState(LEGACY_STATE_PATH):null;
+   const initial=legacy?normalise(legacy.state):seedState();
+   await put(STATE_PATH,JSON.stringify(initial),{access:'private',contentType:'application/json',allowOverwrite:false});
+   if(legacy){try{await del(LEGACY_STATE_PATH,{access:'private'});}catch{}}
+  }catch(error){if(!isAlreadyExists(error))throw error;}
+  await pause(retryDelay(attempt));
+ }
+ const current=await readState();if(!current)throw new Error('Persistent DEBRIX store could not be initialized.');return current;
+}
+async function mutate(change){
+ for(let attempt=0;attempt<12;attempt++){
+  const current=await ensureState(),draft=structuredClone(current.state),result=change(draft);draft.updated_at=now();
+  try{await put(STATE_PATH,JSON.stringify(draft),{access:'private',contentType:'application/json',allowOverwrite:true,ifMatch:current.etag});return result;}
+  catch(error){if(isWriteConflict(error)){await pause(retryDelay(attempt));continue;}throw error;}
+ }
+ throw new HttpError(409,'Records changed repeatedly. Please retry this action.');
+}
 const MAX_EVIDENCE_BYTES=2*1024*1024;
 const evidenceTypes={'.pdf':'application/pdf','.jpg':'image/jpeg','.jpeg':'image/jpeg','.png':'image/png','.webp':'image/webp'};
 function parseEvidence(input){if(!input)return null;if(typeof input.name!=='string'||typeof input.data!=='string')throw new HttpError(400,'Evidence file is invalid.');const name=input.name.split(/[\\/]/).pop().replace(/[^a-zA-Z0-9._-]/g,'_').slice(-100)||'evidence';const ext=name.toLowerCase().match(/\.[^.]+$/)?.[0]||'',type=evidenceTypes[ext];if(!type||input.type&&input.type!==type)throw new HttpError(400,'Attach a PDF, JPG, PNG or WebP evidence file.');if(!/^[A-Za-z0-9+/]+={0,2}$/.test(input.data))throw new HttpError(400,'Evidence file data is invalid.');const bytes=Buffer.from(input.data,'base64');if(!bytes.length||bytes.length>MAX_EVIDENCE_BYTES)throw new HttpError(413,'Evidence files must be 2 MB or smaller.');const signatures={'application/pdf':bytes.subarray(0,5).toString()==='%PDF-','image/jpeg':bytes[0]===0xff&&bytes[1]===0xd8&&bytes[2]===0xff,'image/png':bytes.subarray(0,4).toString('hex')==='89504e47','image/webp':bytes.subarray(0,4).toString()==='RIFF'&&bytes.subarray(8,12).toString()==='WEBP'};if(!signatures[type])throw new HttpError(400,'Evidence file content does not match its file type.');return{name,type,bytes};}
@@ -132,6 +158,6 @@ export default async function handler(req,res){
    }
    return details(s,row);
   });}catch(error){if(uploadedEvidence?.pathname){try{await del(uploadedEvidence.pathname,{access:'private'});}catch{}}throw error;}return json(res,200,{item});
- }catch(error){console.error(error);return json(res,error.status||500,{error:error.message||'Unexpected server error.'});}
+ }catch(error){if(!error?.status||error.status>=500)console.error(error);return json(res,error.status||500,{error:error.message||'Unexpected server error.'});}
 }
 
